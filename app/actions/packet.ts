@@ -6,6 +6,7 @@ import { reviewedBusinessEvidenceProblems } from "@/lib/tax/business-document-in
 import { parsePersistedSelectionUserDetails, TY2026_PENSION_FORMER_EMPLOYER_SUBCATEGORY, resolvePensionFormerEmployerAnswer } from "@/lib/tax/rules/ty2026/subcategories";
 import { resolveApprovedPensionSource, type PensionSource } from "@/lib/tax/pension-source";
 import { pensionPacketValidationError } from "@/lib/tax/pension-packet-validation";
+import { fourIncomePacketValidationError } from "@/lib/tax/four-income-packet-validation";
 import {
   buildNonBusinessComputationsPlan,
   resolveFinalPensionAdditionalNormalSurcharge,
@@ -17,7 +18,10 @@ import {
   isSingleFreelancerServicesFiling,
   isSalaryBusinessServicesFiling,
   isBusinessPensionServicesFiling,
+  isFourIncomeFiling,
 } from "@/lib/tax/business-bank-categories";
+import { buildFourIncomePlan } from "@/lib/tax/four-income-plan";
+import { reconcileFourIncomeLiability } from "@/lib/tax/four-income-liability";
 import { buildSalaryBusinessServicesPlan } from "@/lib/tax/salary-business-services-plan";
 import { buildBusinessPensionServicesPlan } from "@/lib/tax/business-pension-services-plan";
 import {
@@ -435,6 +439,8 @@ export async function getLatestFilingPacketAction(draftId: string) {
       if (ownershipError) return {success:false,error:ownershipError};
       const pensionError = await pensionPacketValidationError(snapshot, draft.id, draft.userId, { allowManual: true });
       if (pensionError) return { success: false, error: pensionError };
+      const fourIncomeError = await fourIncomePacketValidationError(snapshot, draft.id, draft.userId);
+      if (fourIncomeError) return { success: false, error: fourIncomeError };
       businessCoverage = businessCoverageSummary(snapshot.business);
       mappingGaps = snapshot.portalFieldMap?.mappingGaps ?? null;
     }
@@ -701,7 +707,7 @@ export async function generateFilingPacketAction(
       return {
         success: false,
         error:
-          "Services income evidence supports only TY2026 Myself filings with Services alone, exactly Salary + Services, exactly Pension + Services, exactly Business + Services, or exactly Salary + Business + Services, or exactly Salary + Pension + Services, or exactly Business + Pension + Services. Other source combinations are unsupported, so no Services packet was generated.",
+          "Services income evidence supports only TY2026 Myself filings with Services alone, exactly Salary + Services, exactly Pension + Services, exactly Business + Services, or exactly Salary + Business + Services, or exactly Salary + Pension + Services, or exactly Business + Pension + Services, or exactly Salary + Business + Pension + Services. Other source combinations are unsupported, so no Services packet was generated.",
       };
     }
 
@@ -967,6 +973,7 @@ export async function generateFilingPacketAction(
       filerType: draftData.filerType,
       incomeSources: parsedIncomeSources,
     });
+    const isFourIncome = isFourIncomeFiling({ taxYear: draftData.taxYear, filerType: draftData.filerType, incomeSources: parsedIncomeSources });
     const supportedCombinedBusinessSources =
       parsedIncomeSources.includes("business") &&
       parsedIncomeSources.length > 1 &&
@@ -979,7 +986,7 @@ export async function generateFilingPacketAction(
           filerType: draftData.filerType,
           incomeSources: parsedIncomeSources,
         }) ||
-        isBusinessPensionServices);
+        isBusinessPensionServices || isFourIncome);
     const salaryReadyForCombinedComputations =
       !parsedIncomeSources.includes("salary") ||
       (salaryCertificateGrossSalary !== null && salaryCertificateGrossSalary > 0);
@@ -1152,7 +1159,7 @@ export async function generateFilingPacketAction(
     );
 
     const taxCalculationLinesForComputations =
-      !business &&
+      (!business || isFourIncome) &&
       draftData.taxCalculationRevision !== null &&
       draftData.taxCalculationRevision !== undefined &&
       typeof prisma.filingTaxCalculationLine?.findMany === "function"
@@ -1598,6 +1605,26 @@ export async function generateFilingPacketAction(
             },
           })
         : null;
+    let fourIncome: (NonNullable<Extract<ReturnType<typeof buildFourIncomePlan>, { ok: true }>["plan"]> & { liability: Extract<ReturnType<typeof reconcileFourIncomeLiability>, { ok: true }>["liability"]; pensionFingerprint: string }) | null = null;
+    if (isFourIncome) {
+      const normalLines = taxCalculationLinesForComputations.filter(line => line.source === "combined_slab");
+      const normalLine = normalLines.length === 1 ? normalLines[0] : null;
+      const readAmount = (value: unknown) => value === null || value === undefined || value === "" ? NaN : Number(String(value));
+      if (!business || !pensionSource) return { success: false, error: "Four-income packet needs current reviewed Business and Pension sources." };
+      const built = buildFourIncomePlan({
+        taxYear: draftData.taxYear, filerType: draftData.filerType,
+        incomeSources: parsedIncomeSources, calculationRevision: draftData.taxCalculationRevision,
+        salaryGross: salaryCertificateGrossSalary,
+        pension: pensionSource as Parameters<typeof buildFourIncomePlan>[0]["pension"],
+        servicesFields: servicesBusinessFields, hasUnmappedPortalIncome,
+        approvedNormalTax: normalLine ? { taxableIncome: readAmount(normalLine.taxBase), normalTax: readAmount(normalLine.baseTax), surcharge: readAmount(normalLine.surcharge) } : null,
+        businessExpectedIrisTotals: business.expectedIrisTotals,
+      });
+      if (!("plan" in built)) return { success: false, error: `Four-income packet refused (${built.reason}). Review current evidence and supported tax treatment; recalculate and approve a fresh packet.` };
+      const reconciled = reconcileFourIncomeLiability(built.plan, taxCalculationLinesForComputations, { taxWithheld: draftData.taxWithheld, taxPayable: draftData.taxPayable, refundDue: draftData.refundDue });
+      if (!("liability" in reconciled)) return { success: false, error: `Four-income liability refused (${reconciled.reason}). No packet was approved; review withholding and recalculate.` };
+      fourIncome = { ...built.plan, pensionFingerprint: pensionSource.fingerprint, liability: reconciled.liability };
+    }
     if (isBusinessPensionServices && !businessPensionServices) {
       return {
         success: false,
@@ -1684,6 +1711,7 @@ export async function generateFilingPacketAction(
             },
           }
         : {}),
+      ...(fourIncome ? { fourIncome } : {}),
       ...(salaryBusinessServices ? { salaryBusinessServices } : {}),
       ...(businessPensionServices ? { businessPensionServices } : {}),
       coverage,
@@ -1694,6 +1722,10 @@ export async function generateFilingPacketAction(
     const version = (latestPacket?.version ?? 0) + 1;
 
     const packet = await prisma.$transaction(async (tx) => {
+      if (fourIncome) {
+        const current = await tx.filingDraft.findUnique({ where: { id: draft.id }, select: { taxCalculationRevision: true, incomeSources: true, packetApprovalConfirmed: true, userId: true } });
+        if (!current || current.userId !== draft.userId || current.taxCalculationRevision !== fourIncome.calculationRevision || current.incomeSources !== draftData.incomeSources || !current.packetApprovalConfirmed) throw new Error("Four-income evidence/calculation changed during generation. Review and approve a fresh packet.");
+      }
       if (latestPacket?.approvalStatus === "APPROVED") {
         await tx.filingPacket.update({
           where: { id: latestPacket.id },
@@ -1810,6 +1842,7 @@ export async function generateFilingPacketPdfAction(draftId: string) {
     }
     { let ownershipSnapshot:any=null; try { ownershipSnapshot=JSON.parse(packet.snapshotJson); } catch {} const ownershipError=await businessOwnershipPacketValidationError(ownershipSnapshot,draft.id,draft.userId); if (ownershipError) return {success:false,error:ownershipError}; }
     { let parsedSnapshot:any=null; try{parsedSnapshot=JSON.parse(packet.snapshotJson)}catch{} const pensionError = await pensionPacketValidationError(parsedSnapshot, draft.id, draft.userId, { allowManual: true }); if (pensionError) return { success: false, error: pensionError }; }
+    { let parsedSnapshot:any=null; try{parsedSnapshot=JSON.parse(packet.snapshotJson)}catch{} const fourIncomeError = await fourIncomePacketValidationError(parsedSnapshot, draft.id, draft.userId); if (fourIncomeError) return { success: false, error: fourIncomeError }; }
 
     const pdfBuffer = await buildPacketPdf(packet.snapshotJson);
     const packetDirectory = path.join(process.cwd(), "uploads", "packets");

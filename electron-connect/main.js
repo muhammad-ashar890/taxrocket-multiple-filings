@@ -3719,12 +3719,20 @@ function getServicesPacketRoute(snapshot) {
     uniqueSources[0] === "business" &&
     uniqueSources[1] === "pension" &&
     uniqueSources[2] === "services";
+  const salaryBusinessPensionAndServices =
+    uniqueSources.length === 4 &&
+    uniqueSources[0] === "business" &&
+    uniqueSources[1] === "pension" &&
+    uniqueSources[2] === "salary" &&
+    uniqueSources[3] === "services";
   /* Supported Services source sets, kept in lockstep with
      lib/tax/business-bank-categories.ts isFreelancerIncomeSelected and
      lib/tax/business-filing.ts buildServicesTaxDeductionPacket: Services alone,
      Salary + Services, Pension + Services, Business + Services,
-     Salary + Business + Services, Salary + Pension + Services, and Business +
-     Pension + Services. Anything else stays fail-closed. */
+     Salary + Business + Services, Salary + Pension + Services, Business +
+     Pension + Services, and (TY2026 Myself only) Salary + Business + Pension +
+     Services behind the four-income-v1 contract. Anything else stays
+     fail-closed. */
   const exact =
     Number(filing.taxYear) === 2026 &&
     filing.filerType === "myself" &&
@@ -3735,7 +3743,8 @@ function getServicesPacketRoute(snapshot) {
       businessAndServices ||
       salaryBusinessAndServices ||
       salaryPensionAndServices ||
-      businessPensionAndServices);
+      businessPensionAndServices ||
+      salaryBusinessPensionAndServices);
   const salaryBusinessComputationsValid =
     !salaryBusinessAndServices ||
     (snapshot?.salaryBusinessServices?.version === "salary-business-services-v1" &&
@@ -3744,27 +3753,56 @@ function getServicesPacketRoute(snapshot) {
     !businessPensionAndServices ||
     (snapshot?.businessPensionServices?.version === "business-pension-services-v1" &&
       snapshot?.businessPensionServices?.computations?.version === "computations-v1");
-  const payloadValid =
+  // Four-income (Salary + Business + Pension + Services), TY2026 Myself:
+  // execution additionally requires the dedicated four-income-v1 contract to
+  // match this exact filing (same revision, same route) and the Business
+  // computations plan to be a fully typed, minimum/super-tax-free shape.
+  // Nothing about opening this gate types anything: the four-income packet
+  // coupling (revision, liability reconciliation, pension/Business guards) is
+  // enforced server-side and by pension-guard.js.
+  const fourIncomeBusinessComputations =
+    snapshot?.business?.expectedIrisTotals?.computations ?? null;
+  const fourIncomeComputationsValid =
+    !salaryBusinessPensionAndServices ||
+    (snapshot?.fourIncome?.version === "four-income-v1" &&
+      snapshot?.fourIncome?.route === "salary_business_pension_services" &&
+      typeof snapshot?.fourIncome?.calculationRevision === "string" &&
+      snapshot.filing?.taxCalculationRevision ===
+        snapshot.fourIncome.calculationRevision &&
+      Boolean(snapshot?.fourIncome?.liability) &&
+      fourIncomeBusinessComputations?.version === "computations-v1" &&
+      fourIncomeBusinessComputations?.turnover === undefined &&
+      fourIncomeBusinessComputations?.superTax?.action !== "TYPE" &&
+      Number.isInteger(fourIncomeBusinessComputations?.expectedTaxableIncome) &&
+      fourIncomeBusinessComputations.expectedTaxableIncome > 10_000_000 &&
+      Number.isInteger(fourIncomeBusinessComputations?.surcharge?.value) &&
+      fourIncomeBusinessComputations.surcharge.value > 0);
+  const payloadValid = Boolean(
     businessPensionComputationsValid &&
+    fourIncomeComputationsValid &&
     payload?.version === "services-tax-deduction-v1" &&
     payload?.route === "services_tax_deduction" &&
     payload?.coverage === "services_tax_deduction_only" &&
     Number(payload?.taxYear) === 2026 &&
     Array.isArray(payload?.fields) &&
     payload.fields.length > 0 &&
-    salaryBusinessComputationsValid;
+    salaryBusinessComputationsValid,
+  );
   return {
     incomeSources,
     selected,
     salaryIncluded:
-      salaryAndServices || salaryBusinessAndServices || salaryPensionAndServices,
+      salaryAndServices || salaryBusinessAndServices || salaryPensionAndServices ||
+      salaryBusinessPensionAndServices,
     pensionIncluded:
-      pensionAndServices || salaryPensionAndServices || businessPensionAndServices,
+      pensionAndServices || salaryPensionAndServices || businessPensionAndServices ||
+      salaryBusinessPensionAndServices,
     businessIncluded:
-      businessAndServices || salaryBusinessAndServices || businessPensionAndServices,
+      businessAndServices || salaryBusinessAndServices || businessPensionAndServices ||
+      salaryBusinessPensionAndServices,
     exact,
     payloadValid,
-    active: exact && payloadValid,
+    active: Boolean(exact && payloadValid),
   };
 }
 
@@ -4004,7 +4042,7 @@ async function runLocalIrisNavigationCheck(jobContext, job) {
     (servicesRoute.selected || isCombinedBusinessServicesRun) &&
     !servicesRoute.active
   ) {
-    const message = "This Freelancer / Services packet does not carry a verified TY2026 Myself Services payload for Services alone, exactly Salary + Services, exactly Pension + Services, exactly Business + Services, or exactly Salary + Business + Services, or exactly Salary + Pension + Services, or exactly Business + Pension + Services. A Business + Services return needs at least one evidence-approved Services row (Other Revenues income or Tax Deduction withholding) beside the Business payload. Salary + Business + Services also needs its fold-aware computations envelope. Regenerate and approve the packet; the agent will not guess a route or fall back to Business. Nothing was changed in FBR.";
+    const message = "This Freelancer / Services packet does not carry a verified TY2026 Myself Services payload for Services alone, exactly Salary + Services, exactly Pension + Services, exactly Business + Services, exactly Salary + Business + Services, exactly Salary + Pension + Services, exactly Business + Pension + Services, or exactly Salary + Business + Pension + Services behind the four-income-v1 contract. A Business + Services return needs at least one evidence-approved Services row (Other Revenues income or Tax Deduction withholding) beside the Business payload. Salary + Business + Services also needs its fold-aware computations envelope, and the four-source route needs its four-income-v1 envelope. Regenerate and approve the packet; the agent will not guess a route or fall back to Business. Nothing was changed in FBR.";
     return { paused: true, pauseAction: "portal_state_confirmation", pauseMessage: message,
       executionLog: [], result: { requiredAction: "portal_state_confirmation", message, submitted: false, businessCoverage: "services_payload_missing" } };
   }
@@ -4039,17 +4077,30 @@ async function runLocalIrisNavigationCheck(jobContext, job) {
       }
     }
   }
+  const fourIncomeBusinessComputations =
+    snapshot?.fourIncome?.version === "four-income-v1"
+      ? snapshot?.business?.expectedIrisTotals?.computations
+      : undefined;
   if (
     (snapshot.business?.version !== "business-entry-v9" &&
       snapshot.computations !== undefined &&
       snapshot.computations !== null) ||
-    snapshot.salaryBusinessServices?.computations
+    snapshot.salaryBusinessServices?.computations ||
+    fourIncomeBusinessComputations
   ) {
-    const plan = snapshot.salaryBusinessServices?.computations ?? snapshot.computations;
+    const plan =
+      snapshot.salaryBusinessServices?.computations ??
+      fourIncomeBusinessComputations ??
+      snapshot.computations;
+    const envelopeOwnedPlan = Boolean(
+      snapshot.salaryBusinessServices?.computations ?? fourIncomeBusinessComputations,
+    );
     const invalidPlan =
       plan.version !== "computations-v1" ||
-      (!snapshot.salaryBusinessServices && plan.turnover !== undefined) ||
-      (!snapshot.salaryBusinessServices && plan.superTax?.action === "TYPE") ||
+      (envelopeOwnedPlan && plan.turnover !== undefined) ||
+      (envelopeOwnedPlan && plan.superTax?.action === "TYPE") ||
+      (!envelopeOwnedPlan && plan.turnover !== undefined) ||
+      (!envelopeOwnedPlan && plan.superTax?.action === "TYPE") ||
       (typeof irisComputationsDriver !== "undefined" &&
         typeof irisComputationsDriver?.validatePlan === "function" &&
         irisComputationsDriver.validatePlan(plan).length > 0);
@@ -4103,6 +4154,8 @@ async function runLocalIrisNavigationCheck(jobContext, job) {
   const computationsRequested =
     packetFields.some((field) => String(field?.irisCode || "") === "923184") ||
     snapshot.salaryBusinessServices?.computations?.version === "computations-v1" ||
+    (snapshot?.fourIncome?.version === "four-income-v1" &&
+      snapshot?.business?.expectedIrisTotals?.computations?.version === "computations-v1") ||
     (snapshot.business?.version !== "business-entry-v9" &&
       snapshot.computations?.version === "computations-v1");
   const handoffSectionIds = [...(salaryRequested ? irisNavigation.SALARY_WITHHOLDING_SECTION_IDS : []), ...businessSections, ...(computationsRequested ? ["computations"] : [])];
@@ -4541,6 +4594,17 @@ async function runLocalIrisNavigationCheck(jobContext, job) {
 }
 
 function resolveAutofillComputationsPlan(snapshot, servicesRouteActive) {
+  // Four-income (Salary + Business + Pension + Services), TY2026 Myself: the
+  // route no business-entry-v9 packet would otherwise produce. The plan is the
+  // Business packet's own computations envelope: the gate above refuses to
+  // activate without it, and it carries the salary-slab + pension-final
+  // combined 923184 plus 9100/920000 verification. Read-only selection.
+  if (
+    snapshot?.fourIncome?.version === "four-income-v1" &&
+    snapshot?.business?.expectedIrisTotals?.computations?.version === "computations-v1"
+  ) {
+    return snapshot.business.expectedIrisTotals.computations;
+  }
   // Route 7 (11-Nov-2026): Business + Pension + Services ships its combined
   // plan in `businessPensionServices.computations`, and the Services gate will
   // not even activate the route without it. Without this branch that plan was
@@ -4700,7 +4764,7 @@ async function runRealIrisAutofill(jobContext, job, mode) {
         ? "The combined Pension + Services packet contains an unsupported or duplicate pension field. Review the approved Pension Statement and field map; nothing was changed in FBR."
         : servicesFieldMapInvalid
           ? "This Freelancer / Services packet's verified Services rows do not exactly match the flattened FBR field map. Regenerate and approve the packet, then retry. The agent will not guess a target or fall back to another source; nothing was changed in FBR."
-          : "This Freelancer / Services packet does not carry a verified TY2026 Myself Services payload for Services alone, exactly Salary + Services, exactly Pension + Services, exactly Business + Services, or exactly Salary + Business + Services, or exactly Salary + Pension + Services, or exactly Business + Pension + Services. A Business + Services return needs at least one evidence-approved Services row (Other Revenues income or Tax Deduction withholding) beside the Business payload. Salary + Business + Services also needs its fold-aware computations envelope. Regenerate and approve the packet; the agent will not guess a route or fall back to Business. Nothing was changed in FBR.";
+          : "This Freelancer / Services packet does not carry a verified TY2026 Myself Services payload for Services alone, exactly Salary + Services, exactly Pension + Services, exactly Business + Services, exactly Salary + Business + Services, exactly Salary + Pension + Services, exactly Business + Pension + Services, or exactly Salary + Business + Pension + Services behind the four-income-v1 contract. A Business + Services return needs at least one evidence-approved Services row (Other Revenues income or Tax Deduction withholding) beside the Business payload. Salary + Business + Services also needs its fold-aware computations envelope, and the four-source route needs its four-income-v1 envelope. Regenerate and approve the packet; the agent will not guess a route or fall back to Business. Nothing was changed in FBR.";
     onStep("real_autofill_services_payload_missing", pauseMessage);
     return {
       paused: true,
@@ -4724,17 +4788,30 @@ async function runRealIrisAutofill(jobContext, job, mode) {
     };
   }
 
+  const fourIncomeBusinessComputations =
+    snapshot?.fourIncome?.version === "four-income-v1"
+      ? snapshot?.business?.expectedIrisTotals?.computations
+      : undefined;
   if (
     (snapshot.business?.version !== "business-entry-v9" &&
       snapshot.computations !== undefined &&
       snapshot.computations !== null) ||
-    snapshot.salaryBusinessServices?.computations
+    snapshot.salaryBusinessServices?.computations ||
+    fourIncomeBusinessComputations
   ) {
-    const plan = snapshot.salaryBusinessServices?.computations ?? snapshot.computations;
+    const plan =
+      snapshot.salaryBusinessServices?.computations ??
+      fourIncomeBusinessComputations ??
+      snapshot.computations;
+    const envelopeOwnedPlan = Boolean(
+      snapshot.salaryBusinessServices?.computations ?? fourIncomeBusinessComputations,
+    );
     const invalidPlan =
       plan.version !== "computations-v1" ||
-      (!snapshot.salaryBusinessServices && plan.turnover !== undefined) ||
-      (!snapshot.salaryBusinessServices && plan.superTax?.action === "TYPE") ||
+      (envelopeOwnedPlan && plan.turnover !== undefined) ||
+      (envelopeOwnedPlan && plan.superTax?.action === "TYPE") ||
+      (!envelopeOwnedPlan && plan.turnover !== undefined) ||
+      (!envelopeOwnedPlan && plan.superTax?.action === "TYPE") ||
       (typeof irisComputationsDriver !== "undefined" &&
         typeof irisComputationsDriver?.validatePlan === "function" &&
         irisComputationsDriver.validatePlan(plan).length > 0);
@@ -5151,7 +5228,7 @@ async function runRealIrisAutofill(jobContext, job, mode) {
         : []),
       ...(servicesHasCompanionSource
         ?
-          ["salary", "tax_deductions", ...(servicesRoute.pensionIncluded || snapshot.salaryBusinessServices?.computations?.version === "computations-v1" || snapshot.businessPensionServices?.computations?.version === "computations-v1" ? ["computations"] : [])]
+          ["salary", "tax_deductions", ...(servicesRoute.pensionIncluded || snapshot.salaryBusinessServices?.computations?.version === "computations-v1" || snapshot.businessPensionServices?.computations?.version === "computations-v1" || (snapshot?.fourIncome?.version === "four-income-v1" && snapshot?.business?.expectedIrisTotals?.computations?.version === "computations-v1") ? ["computations"] : [])]
         : []),
     ];
     const servicesRouteLabel = handoffRoute.label;
@@ -6373,7 +6450,10 @@ async function runRealIrisAutofill(jobContext, job, mode) {
   let appEstimate = null;
   const expectedTotalsTour =
     censusEnd ||
-    (snapshot.salaryBusinessServices ? scopedServicesReadback?.tour : null);
+    (snapshot.salaryBusinessServices ||
+    snapshot?.fourIncome?.version === "four-income-v1"
+      ? scopedServicesReadback?.tour
+      : null);
   if (
     expectedTotalsTour &&
     snapshot?.business &&
@@ -6408,8 +6488,9 @@ async function runRealIrisAutofill(jobContext, job, mode) {
         onStep("iris_totals_not_checked", `${entry.code} not checked: ${entry.reason}.`);
     }
     // The app's full estimate includes the manual items; IRIS does not yet.
-    const estimate = snapshot.salaryBusinessServices
-      ? NaN // Business-only profit is not the triple return's full estimate.
+    const estimate = snapshot.salaryBusinessServices ||
+      snapshot?.fourIncome?.version === "four-income-v1"
+      ? NaN // Neither combined route's full estimate equals a Business-only figure.
       : Number(snapshot.business.computedEstimate?.taxableIncome);
     const irisTaxable = irisTourCensus.parseIrisAmount(
       irisTourCensus.pickTotalColumn(irisTotalsDetailed["9100"], "normal"),
@@ -6722,7 +6803,8 @@ async function runRealIrisAutofill(jobContext, job, mode) {
   const servicesPlaced = servicesRouteActive
     ? irisRowFiller.summarise(results.filter((entry) => isServicesCodedField(entry)))
     : null;
-  const businessSummary = snapshot.salaryBusinessServices
+  const businessSummary = snapshot.salaryBusinessServices ||
+    snapshot?.fourIncome?.version === "four-income-v1"
     ? {
         ...businessPlaced,
         total: businessTotal,
@@ -7079,11 +7161,14 @@ async function runRealIrisAutofill(jobContext, job, mode) {
             route: "services_tax_deduction",
             businessCoverage: snapshot.salaryBusinessServices
               ? "salary_business_services"
-              : "services_tax_deduction_only",
+              : snapshot?.fourIncome?.version === "four-income-v1"
+                ? "four_income"
+                : "services_tax_deduction_only",
             salaryIncluded: servicesRoute.salaryIncluded,
             pensionIncluded: servicesRoute.pensionIncluded,
             businessIncluded: servicesRoute.businessIncluded,
-            ...(snapshot.salaryBusinessServices && servicesPlaced
+            ...((snapshot.salaryBusinessServices ||
+              snapshot?.fourIncome?.version === "four-income-v1") && servicesPlaced
               ? {
                   services: {
                     ...servicesPlaced,

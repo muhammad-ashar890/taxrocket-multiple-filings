@@ -17,7 +17,7 @@ export type CalculationLineForComputations = {
 };
 
 export const SURCHARGE_SERVICES_OR_MIXED_USER_MESSAGE =
-  "Surcharge (row 923184): Services or manual portal income may join Taxable Income (9100) or interact with minimum/final tax in IRIS, so TaxRocket did not type this figure automatically. If IRIS leaves row 923184 blank while Taxable Income (9100) is above PKR 10 million, check Normal Tax (920000): the surcharge is 9% when salary exceeds 75% of taxable income, otherwise 10%.";
+  "Surcharge (row 923184): Services or manual portal income may join Taxable Income (9100) or interact with minimum/final tax in IRIS, so TaxRocket did not type this figure automatically. If IRIS leaves row 923184 blank while Taxable Income (9100) is above PKR 10 million, check Normal Tax (920000): the surcharge is 9% where the Section 4AB Salary-head proviso applies, otherwise 10%.";
 
 const SECTION_4AB_THRESHOLD = 10_000_000;
 const SURCHARGE_LABEL = "Surcharge on high earning person u/s 4AB";

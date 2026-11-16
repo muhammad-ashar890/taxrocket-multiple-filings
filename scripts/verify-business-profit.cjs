@@ -402,8 +402,9 @@ try {
   ok(boundary.note.includes("clause (1)"), "exactly 75% reads clause (1)");
 
   // Surcharge on a mixed return (Phase 3b decision D4): salary is 55% of
-  // 11m, so the clause (1) table applies and the surcharge is 10%; the 9%
-  // rate is only for the salaried table (salary above 75%).
+  // 11m, so the clause (1) slab table applies (75% test strictly fails), but
+  // the Section 4AB Salary-head proviso is independent of that test — any
+  // finite positive Salary-head income prices the surcharge at 9%.
   const mixedHighIncome = estimate([
     { route: "salary", income: 6_000_000 },
     biz(5_000_000),
@@ -415,13 +416,13 @@ try {
   );
   equal(
     mixedHighIncome.breakdown[0].surcharge,
-    404_000,
-    "10% surcharge on the clause (1) table even with salary (D4)",
+    363_600,
+    "9% surcharge on the clause (1) table: the Salary-head proviso applies independently of the slab-table test",
   );
   ok(
-    mixedHighIncome.breakdown[0].note.includes("A 10% Section 4AB surcharge") &&
-      mixedHighIncome.breakdown[0].note.includes("the 9% rate is only for the salaried table"),
-    "note states the 10% rate and why 9% does not apply",
+    mixedHighIncome.breakdown[0].note.includes("A 9% Section 4AB surcharge") &&
+      mixedHighIncome.breakdown[0].note.includes("Salary-head proviso applies independently"),
+    "note states the 9% rate and why the Salary-head proviso drives it",
   );
   // Salary above 75% of a combined income over 10m: the salaried table and 9%.
   const salariedHigh = estimate([

@@ -63,10 +63,13 @@ const bank = (income) => ({
 
 // ---------------------------------------------------------------- D4 (4AB)
 
-test("4AB rate: 9% only when salary is MORE than 75% of taxable income", () => {
+test("4AB rate: 9% when the Salary head carries any positive income; 10% otherwise", () => {
+  // Section 4AB, Division I proviso (Feb-2026 text): 9% where income "so much
+  // thereof as is attributable to salary" exists; the 75% test selects the
+  // slab table only and never the surcharge rate.
   assert.equal(taxCalc.section4ABRatePercent({ salaryHeadIncome: 7_600_001, taxableIncome: 10_000_000 }), 9);
-  assert.equal(taxCalc.section4ABRatePercent({ salaryHeadIncome: 7_500_000, taxableIncome: 10_000_000 }), 10, "exactly 75% is not more");
-  assert.equal(taxCalc.section4ABRatePercent({ salaryHeadIncome: 1, taxableIncome: 10_000_000 }), 10, "some salary is not enough");
+  assert.equal(taxCalc.section4ABRatePercent({ salaryHeadIncome: 7_500_000, taxableIncome: 10_000_000 }), 9, "exactly 75% still carries a Salary head");
+  assert.equal(taxCalc.section4ABRatePercent({ salaryHeadIncome: 1, taxableIncome: 10_000_000 }), 9, "any positive Salary-head income carries the proviso");
   assert.equal(taxCalc.section4ABRatePercent({ salaryHeadIncome: 0, taxableIncome: 10_000_000 }), 10);
   assert.equal(taxCalc.SECTION_4AB_THRESHOLD, 10_000_000);
 });
@@ -82,15 +85,14 @@ test("business only, 12m: clause (1) tax and the 10% surcharge", () => {
   assert.equal(lineFor(r, "super_tax"), null);
 });
 
-test("salary 7m + business 5m (58% salary): clause (1) and 10%, not 9%", () => {
+test("salary 7m + business 5m (58% salary): clause (1) slab table, 9% surcharge (Salary head exists)", () => {
   const r = estimate([
     { route: "salary", income: 7_000_000 },
     { route: "business_profit", income: 5_000_000 },
   ]);
   assert.equal(r.baseTax, 4_490_000);
-  assert.equal(r.surcharge, 449_000);
-  assert.match(r.note, /A 10% Section 4AB surcharge/);
-  assert.match(r.note, /the 9% rate is only for the salaried table/);
+  assert.equal(r.surcharge, 404_100, "9% of 4,490,000");
+  assert.match(r.note, /A 9% Section 4AB surcharge/);
 });
 
 test("salary 13m + business 2m (86.7% salary): salaried table and 9%", () => {

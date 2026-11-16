@@ -1,3 +1,4 @@
+import { isFourIncomeSourceSet } from "./four-income-source-set";
 import type { MoneyInput } from "@/lib/money";
 
 export const BUSINESS_BANK_INCOME_CATEGORIES = ["BUSINESS_SALES", "BUSINESS_OTHER_RECEIPTS"] as const;
@@ -35,7 +36,7 @@ function readIncomeSources(value: string | string[] | null | undefined): string[
   try {
     const sources = typeof value === "string" ? JSON.parse(value) : value;
     return Array.isArray(sources)
-      ? sources.filter((source): source is string => typeof source === "string")
+      ? (sources.every(source => typeof source === "string") ? sources : [])
       : [];
   } catch {
     return [];
@@ -43,7 +44,7 @@ function readIncomeSources(value: string | string[] | null | undefined): string[
 }
 
 /**
- * Freelancer / Services automation supports exactly seven source sets:
+ * Freelancer / Services automation supports the seven existing source sets plus the exact four-income set:
  * Services alone, Salary + Services, Pension + Services, Business + Services,
  * Salary + Business + Services, Salary + Pension + Services, and Business +
  * Pension + Services. All other combinations remain fail-closed.
@@ -128,7 +129,8 @@ export function isFreelancerIncomeSelected(input: {
       normalized[1] === "services") ||
     isSalaryBusinessServicesSourceSet(sources) ||
     isSalaryPensionServicesSourceSet(sources) ||
-    isBusinessPensionServicesSourceSet(sources)
+    isBusinessPensionServicesSourceSet(sources) ||
+    isFourIncomeSourceSet(sources)
   );
 }
 
@@ -174,6 +176,11 @@ export function isBusinessPensionServicesFiling(input: {
     input.filerType === "myself" &&
     isBusinessPensionServicesSourceSet(input.incomeSources)
   );
+}
+
+/** Setup/evidence eligibility only. Execution requires the versioned fourIncome contract. */
+export function isFourIncomeFiling(input: { taxYear?: number; filerType?: string | null; incomeSources?: string | string[] | null }) {
+  return input.taxYear === 2026 && input.filerType === "myself" && isFourIncomeSourceSet(readIncomeSources(input.incomeSources));
 }
 
 /** Full server-side gate for the supported TY2026 Myself Services routes. */

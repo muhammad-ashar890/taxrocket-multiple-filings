@@ -81,6 +81,10 @@ export type ComputationsEntry = {
   message: string;
   /** True when 923184 Total Income is already typed via portalFieldMap (e.g. final_above_10m pension). */
   alreadyHandledInFieldMap?: boolean;
+  /** One combined amount owned by the field map; the driver verifies, never types it. */
+  fieldMapCombinedValue?: number;
+  /** Approved pension component inside fieldMapCombinedValue. */
+  pensionSurchargePart?: number;
 };
 /**
  * Phase 3c (fix52): the Section 113 turnover row. "+ Turnover" on row 999905
@@ -132,11 +136,11 @@ export type MinimumTaxPacketInput = {
 };
 
 export const SURCHARGE_USER_MESSAGE =
-  "Surcharge (row 923184): TaxRocket could not work out this figure for your return, so please type it yourself in IRIS if Taxable Income (9100) is above PKR 10 million: 10% of Normal Tax (920000), or 9% only if your salary is more than 75% of taxable income.";
+  "Surcharge (row 923184): TaxRocket could not work out this figure for your return, so please type it yourself in IRIS if Taxable Income (9100) is above PKR 10 million: 10% of Normal Tax (920000), or 9% where the Section 4AB Salary-head proviso applies.";
 export const SURCHARGE_MINIMUM_TAX_MESSAGE =
   "Surcharge (row 923184): your minimum tax on turnover (Section 113) is higher than Normal Tax plus surcharge, so the minimum tax is paid instead of both (s.113(2)(b)) and TaxRocket left this row empty. If your tax adviser reads the law differently and you want to put the surcharge, type it yourself in IRIS: 10% of Normal Tax (920000).";
 export const SURCHARGE_WITH_MINIMUM_TAX_USER_MESSAGE =
-  "Surcharge (row 923184): TaxRocket could not work out this figure for your return. If Taxable Income (9100) is above PKR 10 million it is 10% of Normal Tax (920000), or 9% only if your salary is more than 75% of taxable income. Leave it empty if your minimum tax on turnover (Section 113) is higher than Normal Tax plus that surcharge: the minimum tax is then paid instead.";
+  "Surcharge (row 923184): TaxRocket could not work out this figure for your return. If Taxable Income (9100) is above PKR 10 million it is 10% of Normal Tax (920000), or 9% where the Section 4AB Salary-head proviso applies. Leave it empty if your minimum tax on turnover (Section 113) is higher than Normal Tax plus that surcharge: the minimum tax is then paid instead.";
 export const turnoverUserMessage = (label: string) =>
   `Minimum tax (Section 113): TaxRocket did not type your turnover because your sales are not confirmed as excluding Sales Tax and Federal Excise. On the Computations tab press "+ Turnover", tick "${label}" and type your turnover (sales without Sales Tax / FED plus other business receipts) in Total Income.`;
 export const SUPER_TAX_USER_MESSAGE =
@@ -610,7 +614,7 @@ export function buildExpectedIrisTotals(input: {
       const surchargeRate = businessOnly
         ? 10
         : section4ABRatePercent({ salaryHeadIncome, taxableIncome: taxable });
-      const readsSalariedTable = !businessOnly && surchargeRate === 9;
+      const readsSalariedTable = !businessOnly && salaryHeadIncome * 4 > taxable * 3;
       // The slab itself is law; only the 30% band on a business-only return was seen on IRIS so far.
       const bandSeenLive = businessOnly && taxable > 1_600_000 && taxable <= 3_200_000;
       const adjustableSections = Math.max(0, Number(input.taxDeductionSections?.adjustable) || 0);
@@ -629,8 +633,8 @@ export function buildExpectedIrisTotals(input: {
           : "Division I clause (1) slab on 9100",
         chainProven && bandSeenLive && withholdingSeenLive && !minimumTaxInput,
       );
-      // Phase 3b: Section 4AB surcharge above PKR 10 million: 9% where salary-
-      // head income exceeds 75% of taxable income, otherwise 10% (decision D4).
+      // Section 4AB: 9% with Salary-head income, otherwise 10%; separate
+      // from the >75% test that selects the slab table.
       const surcharge =
         taxable > SECTION_4AB_THRESHOLD
           ? Math.round((tax * surchargeRate) / 100)

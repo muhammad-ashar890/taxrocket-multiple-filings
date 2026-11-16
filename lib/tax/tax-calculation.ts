@@ -145,6 +145,8 @@ export type TaxRouteAttributes = {
   cfValueUsd?: number;
   /** Whether an imported handset is a smartphone (matters at $30 or less). */
   isSmartphone?: boolean;
+  /** Section 154A human confirmation; see Ty2026SelectionUserDetails docs. */
+  services154AFinalTaxConfirmed?: boolean;
 };
 
 /** One income source handed to the calculator. */
@@ -262,6 +264,8 @@ function isRouteFailure(
  * handled; anything else returns null so the caller reports NEEDS_RULES
  * instead of inventing a number.
  */
+const SECTION_154A_EXPORT_SUBCATEGORIES = new Set(["export-it-ites-pseb", "export-services-other"]);
+
 function evaluateRateCardValue(
   value: RateCardValue,
   amount: number,
@@ -414,24 +418,18 @@ export function divisionIClause1Tax(taxableIncome: number): number {
 export const SECTION_4AB_THRESHOLD = 10_000_000;
 
 /**
- * Phase 3b decision D4 (16-Oct-2026): the Section 4AB surcharge rate for an
- * individual or AOP member. 9% only where the salaried table applies, i.e.
- * salary-head income is more than 75% of taxable income (Division I clause
- * (2)); otherwise 10%. The proviso's words are wider ("an individual deriving
- * income chargeable under the head Salary"), but FBR's own withholding rate
- * cards for FA 2025 and FA 2026 charge 10% on pension, which is Salary-head
- * income, so a person on the clause (1) table is charged the 10% FBR expects.
- * Sources: business-income-work/phase-3/D2-D5-RESEARCH-2026-10-16.md.
+ * TY2026 Section 4AB: 10% generally, 9% where the individual derives income
+ * chargeable under Salary. This is NOT Division I's >75% slab-table test.
+ * A normal-tax continuing-employment pension is Salary-head income; the
+ * special final pension surcharge is computed separately and remains 10%.
+ * Sources: official ITO amended 20-Feb-2026, printed p33, and FBR Circular
+ * 01/2025-26 section 2. See docs/ty2026-four-income-rules.md.
  */
 export function section4ABRatePercent(input: {
   salaryHeadIncome: number;
   taxableIncome: number;
 }): 9 | 10 {
-  const salary = Number(input.salaryHeadIncome) || 0;
-  const taxable = Number(input.taxableIncome) || 0;
-  // "Exceeds seventy-five per cent" is strict; same cross-multiplied test as
-  // the combined slab.
-  return taxable > 0 && salary * 4 > taxable * 3 ? 9 : 10;
+  return Number.isFinite(input.salaryHeadIncome) && input.salaryHeadIncome > 0 ? 9 : 10;
 }
 
 /**
@@ -496,8 +494,8 @@ export function section4CSuperTax(income: number): {
  * taxable income. Division I clause (2) (the salaried table, the same bands
  * as Section 149) applies where salary-head income exceeds 75% of the total;
  * otherwise clause (1) above applies. The Section 4AB surcharge runs on the
- * combined figure above PKR 10 million: 9% on the salaried table, 10% on the
- * clause (1) table (`section4ABRatePercent`, Phase 3b decision D4). Rental
+ * combined figure above PKR 10 million: 9% with Salary-head income, otherwise
+ * 10%, independently of the slab-table test (`section4ABRatePercent`). Rental
  * enters at gross rent because Section 15A deductions need a professional's
  * review, and the note says so.
  */
@@ -575,9 +573,7 @@ function computeCombinedSlabRoute(input: {
   }
   const baseTax =
     band.base + (band.percent / 100) * (combinedIncome - band.over);
-  // Section 4AB above PKR 10 million. This branch is only reached at or
-  // below the 75% test, so the rate is always 10% here; the 9% rate is kept
-  // for the salaried table (Phase 3b decision D4).
+  // The Section 4AB Salary-head proviso also applies on clause (1) slabs.
   const surchargePercent = section4ABRatePercent({
     salaryHeadIncome,
     taxableIncome: combinedIncome,
@@ -588,7 +584,7 @@ function computeCombinedSlabRoute(input: {
       : 0;
   const salaryRateNote =
     salaryHeadIncome > 0
-      ? "(the 9% rate is only for the salaried table, where salary is more than 75% of taxable income) "
+      ? "(the Salary-head proviso applies independently of the slab-table test) "
       : "";
   return {
     baseTax,
@@ -977,14 +973,26 @@ function computeFlatRoute(input: {
     };
   }
 
-  const finalTaxNote = definition.isFinalTax
-    ? ", treated as a final-tax route"
-    : "";
+  // Section 154A: final-tax treatment needs the taxpayer's explicit human
+  // confirmation on the Services card. Without it the receipt is shown as
+  // assessable (conservative) and four-income filing refuses to proceed.
+  const servicesFinalTax =
+    input.route === "services" &&
+    SECTION_154A_EXPORT_SUBCATEGORIES.has(subcategory ?? "") &&
+    input.attributes?.services154AFinalTaxConfirmed === true;
+  const effectiveIsFinalTax = definition.isFinalTax || servicesFinalTax;
+  const finalTaxNote = effectiveIsFinalTax
+    ? ", treated as a final-tax route" +
+      (servicesFinalTax ? " (Section 154A conditions confirmed by the taxpayer)" : "")
+    : input.route === "services" &&
+        SECTION_154A_EXPORT_SUBCATEGORIES.has(subcategory ?? "")
+      ? " (Section 154A final-tax treatment NOT confirmed — review the Services card before filing)"
+      : "";
 
   return {
     baseTax,
     surcharge: 0,
-    isFinalTax: definition.isFinalTax,
+    isFinalTax: effectiveIsFinalTax,
     appliedRuleIds: [rule.id],
     note:
       `Pilot ${input.filerStatus} estimate for TY2026 ${definition.noteSubject} ` +

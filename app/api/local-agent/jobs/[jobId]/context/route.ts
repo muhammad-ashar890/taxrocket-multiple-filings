@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { hashToken } from "@/lib/tax/fbr-desktop";
 import { businessOwnershipPacketValidationError } from "@/lib/tax/business-ownership-packet-validation";
 import { pensionPacketValidationError } from "@/lib/tax/pension-packet-validation";
+import { fourIncomePacketValidationError } from "@/lib/tax/four-income-packet-validation";
 import {
   getFbrPortalAutomationConfig,
   DEFAULT_SELECTOR_BUNDLE,
@@ -143,6 +144,9 @@ export async function GET(
     // version, including older agents that do not know the new local guard.
     const pensionError = await pensionPacketValidationError(snapshot, job.filingDraftId, device.userId);
     if (pensionError) return NextResponse.json({ success: false, error: pensionError, code: "PENSION_REVIEW_REQUIRED" }, { status: 409 });
+
+    const fourIncomeError = await fourIncomePacketValidationError(snapshot, job.filingDraftId, device.userId);
+    if (fourIncomeError) return NextResponse.json({ success: false, error: fourIncomeError, code: "FOUR_INCOME_REVIEW_REQUIRED" }, { status: 409 });
 
     // Mark job as accepted/running
     if (job.status === "created" || job.status === "offered_to_device") {

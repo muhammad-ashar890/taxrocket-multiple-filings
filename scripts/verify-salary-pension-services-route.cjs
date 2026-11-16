@@ -140,8 +140,17 @@ test("the five previously supported sets and every blocked set keep their behavi
     );
   }
 
+  // The four-income set (Salary + Business + Pension + Services) is a separate,
+  // TY2026 Myself-only route opened 16-Nov-2026; see verify-four-income-route.cjs.
+  assert.equal(
+    isSingleFreelancerServicesFiling({
+      taxYear: 2026,
+      filerType: "myself",
+      incomeSources: ["salary", "pension", "services", "business"],
+    }),
+    true,
+  );
   for (const input of [
-    { incomeSources: ["salary", "pension", "services", "business"] },
     { incomeSources: ["salary", "pension", "services", "services"] },
     { incomeSources: ["salary", "pension"] },
     { incomeSources: targetSources, taxYear: 2025 },

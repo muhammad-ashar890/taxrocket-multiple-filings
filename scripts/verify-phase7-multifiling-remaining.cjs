@@ -294,12 +294,19 @@ test("7A: unsupported Services multi-source combinations fail closed at Setup an
     true,
     "Business + Pension + Services gate opened 11-Nov-2026 (activation still needs its envelope)",
   );
-  for (const bad of [
-    {
+  assert.equal(
+    isSingleFreelancerServicesFiling({
       taxYear: 2026,
       filerType: "myself",
       incomeSources: ["salary", "business", "pension", "services"],
-    },
+    }),
+    true,
+    "Salary + Business + Pension + Services is the TY2026 Myself four-income route (packet/desktop still require the four-income-v1 envelope)",
+  );
+  for (const bad of [
+    { taxYear: 2026, filerType: "myself", incomeSources: ["business", "pension", "salary", "salary", "services"] },
+    { taxYear: 2025, filerType: "myself", incomeSources: ["salary", "business", "pension", "services"] },
+    { taxYear: 2026, filerType: "my_business", incomeSources: ["salary", "business", "pension", "services"] },
     { taxYear: 2025, filerType: "myself", incomeSources: ["services"] },
     { taxYear: 2026, filerType: "my_business", incomeSources: ["services"] },
   ]) {
@@ -372,7 +379,7 @@ test("7A: unsupported Services multi-source combinations fail closed at Setup an
   );
 });
 
-test("7B: Salary + Business > PKR 10M prices exact 9% vs 10% Section 4AB surcharge and safe Section 4C super tax", async () => {
+test("7B: Salary + Business > PKR 10M prices the Salary-head 9% Section 4AB surcharge independently of slab selection and safe Section 4C super tax", async () => {
   // 1) Backward compatibility: when companionNormalIncome is omitted, multi-head skip remains intact.
   const withoutCompanion = makeBusinessPacket({
     incomeSources: ["salary", "business"],
@@ -461,13 +468,13 @@ test("7B: Salary + Business > PKR 10M prices exact 9% vs 10% Section 4AB surchar
   assert.equal(hAuto.calls.fill.length, 0);
   assert.equal(outAuto.decisions[0].reason, "iris_computed_in_normal_column");
 
-  // 3) Salary 7M + Business 5M = 12M (58.3% salary <= 75% -> Clause 1 table + 10% surcharge).
+  // 3) Salary 7M + Business 5M = 12M (58.3% salary <= 75% -> Clause 1 table, but 9% Salary-head surcharge).
   const engineNonSalaried = estimateEngine([
     { route: "salary", income: 7_000_000 },
     { route: "business_profit", income: 5_000_000 },
   ]);
   assert.equal(engineNonSalaried.baseTax, 4_490_000);
-  assert.equal(engineNonSalaried.surcharge, 449_000);
+  assert.equal(engineNonSalaried.surcharge, 404_100);
 
   const pktNonSalaried = makeBusinessPacket({
     incomeSources: ["salary", "business"],
@@ -482,8 +489,8 @@ test("7B: Salary + Business > PKR 10M prices exact 9% vs 10% Section 4AB surchar
   assert.equal(compNonSalaried.expectedTaxableIncome, 12_000_000);
   assert.equal(compNonSalaried.expectedNormalTax, 4_490_000);
   assert.equal(compNonSalaried.surcharge.action, "TYPE");
-  assert.equal(compNonSalaried.surcharge.ratePercent, 10);
-  assert.equal(compNonSalaried.surcharge.value, 449_000);
+  assert.equal(compNonSalaried.surcharge.ratePercent, 9);
+  assert.equal(compNonSalaried.surcharge.value, 404_100);
 
   // 4) Mixed return > PKR 150M keeps superTax as USER so row 3000 !== combined base never misfires.
   const pktAbove150m = makeBusinessPacket({
@@ -526,7 +533,7 @@ test("7B: Business + Pension (exempt and working-as-salary) > PKR 10M prices exa
     449_000,
   );
 
-  // Business 4M + Pension 12M (taxed as salary): 12M / 16M = 75.0% (NOT strictly > 75%) -> 10% Clause 1.
+  // Business 4M + Pension 12M (taxed as salary): 12M / 16M = 75.0% (NOT strictly > 75%) -> Clause 1 slab, 9% Salary-head surcharge.
   const pktBoundary75 = makeBusinessPacket({
     incomeSources: ["business", "pension"],
     grossSales: 4_000_000,
@@ -537,7 +544,7 @@ test("7B: Business + Pension (exempt and working-as-salary) > PKR 10M prices exa
   });
   assert.equal(
     pktBoundary75.expectedIrisTotals.computations.surcharge.ratePercent,
-    10,
+    9,
   );
 
   // Business 3M + Pension 12M (taxed as salary): 12M / 15M = 80.0% (> 75%) -> 9% Clause 2 salaried!

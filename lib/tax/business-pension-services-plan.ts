@@ -26,12 +26,8 @@ import { section4ABRatePercent } from "./tax-calculation";
  *    inside Division I) changes 9100/920000, so this builder fails closed
  *    instead of guessing — only final-tax (section 154A) Services revenue is
  *    folded here;
- *  - it does not decide the parked `923184` typing question. When the pension
- *    carries a final-tax surcharge the two halves of row 923184 live in two
- *    different owners today (portal field map: pension half; Computations:
- *    normal-slab half). The envelope publishes the arithmetic and leaves the
- *    row to the operator (`action: "USER"`), exactly like every other
- *    unresolved surcharge route.
+ *  - it never writes the combined surcharge a second time. The field map owns
+ *    row 923184; the desktop verifies its combined value and both base figures.
  */
 
 export const BUSINESS_PENSION_SERVICES_VERSION = "business-pension-services-v1";
@@ -243,15 +239,18 @@ export function buildBusinessPensionServicesPlan(input: {
     // (portal-field-map.ts, `PENSION_SURCHARGE`), and the server resolver that
     // feeds that second half now admits the final-tax Services leg. So the field
     // map types the whole row and this plan must NOT type a half of it: the
-    // action stays USER (the computations driver touches nothing) and only
-    // confirms the figure. Before this, nobody typed it and the operator had to.
+    // handled flag prevents a second write; the explicit components enable
+    // read-only verification rather than an unverified manual handoff.
     owner = "field_map";
     surchargeEntry = {
       code: "923184",
       label: packetSurcharge.label || "Surcharge on high earning person u/s 4AB",
-      action: "USER",
-      value: 0,
-      ratePercent: null,
+      action: normalTaxPart > 0 ? "TYPE" : "NONE",
+      value: normalTaxPart,
+      ratePercent,
+      alreadyHandledInFieldMap: true,
+      fieldMapCombinedValue: surchargeValue,
+      pensionSurchargePart: pensionSurcharge,
       basis:
         `Row 923184 is the sum of the pension final-tax surcharge ${phone(pensionSurcharge)} ` +
         `and ${ratePercent}% of Normal Tax ${phone(normalTax)} (920000) = ${phone(normalTaxPart)}, ` +
@@ -260,12 +259,12 @@ export function buildBusinessPensionServicesPlan(input: {
       message:
         `IRIS row 923184 is the pension Section 4AB surcharge ${phone(pensionSurcharge)} plus ` +
         `${ratePercent}% of Normal Tax (920000) = ${phone(normalTaxPart)}, i.e. ${phone(surchargeValue)} in total. ` +
-        `TaxRocket typed that combined figure from the approved packet; confirm IRIS shows the same value, ` +
-        `and enter it yourself only if IRIS disagrees.`,
+        `The approved field map targets that combined figure; the computations driver verifies it ` +
+        `against the actual IRIS row and normal-tax bases without typing it again.`,
     };
     notes.push(
       `Surcharge row 923184: pension ${phone(pensionSurcharge)} + ${ratePercent}% of Normal Tax ${phone(normalTax)} (${phone(normalTaxPart)}) = ${phone(surchargeValue)}. ` +
-        `Typed as one figure by the packet's field map; the computations plan confirms it and types nothing.`,
+        `Owned by the packet's field map; the computations plan verifies it and types nothing.`,
     );
   } else {
     owner = "envelope";
@@ -334,7 +333,7 @@ export function buildBusinessPensionServicesPlan(input: {
   };
 
   notes.push(
-    `Taxable Income (9100) ${phone(taxable)} = Business ${phone(computations.expectedBusinessIncome ?? 0)} + pension taxed at the normal slabs ${phone(normalIncome)}; Normal Tax (920000) ${phone(normalTax)} at the Division I slab with no salary head.`,
+    `Taxable Income (9100) ${phone(taxable)} = Business ${phone(computations.expectedBusinessIncome ?? 0)} + pension taxed at the normal slabs ${phone(normalIncome)}; Normal Tax (920000) ${phone(normalTax)} at the applicable Division I slab; normal-tax pension contributes to the Salary head.`,
   );
   if (finalTaxableIncome > 0) {
     notes.push(

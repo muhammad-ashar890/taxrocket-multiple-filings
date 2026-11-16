@@ -180,8 +180,11 @@ test("P-B: one owner, one figure — the field map types both halves", () => {
   assert.equal(P_B_SNAPSHOT.surcharge.value, COMBINED);
   // The plan itself types nothing, so two drivers can never write one cell.
   const planSurcharge = P_B_SNAPSHOT.computations.surcharge;
-  assert.equal(planSurcharge.action, "USER");
-  assert.equal(planSurcharge.value, 0);
+  assert.equal(planSurcharge.action, "TYPE");
+  assert.equal(planSurcharge.value, BUSINESS_SURCHARGE);
+  assert.equal(planSurcharge.alreadyHandledInFieldMap, true);
+  assert.equal(planSurcharge.fieldMapCombinedValue, COMBINED);
+  assert.equal(planSurcharge.pensionSurchargePart, PENSION_SURCHARGE);
   assert.match(planSurcharge.message, /594,000|584,000/);
   assert.match(planSurcharge.basis, /field map/);
   const row = P_B_SNAPSHOT.expectedIrisTotals.rows.find((r) => r.code === "923184");

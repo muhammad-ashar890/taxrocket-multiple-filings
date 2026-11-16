@@ -178,7 +178,9 @@ test("P-B final_above_10m: the field map owns the combined row (11-Nov-2026)", (
     "field_map",
     "both halves are typed as one figure by the packet's field map",
   );
-  assert.equal(built.computations.surcharge.action, "USER");
+  assert.equal(built.computations.surcharge.action, "TYPE");
+  assert.equal(built.computations.surcharge.alreadyHandledInFieldMap, true);
+  assert.equal(built.computations.surcharge.fieldMapCombinedValue, built.surcharge.value);
   assert.equal(
     built.surcharge.value,
     built.surcharge.normalTaxPart + 100_000,
@@ -191,8 +193,8 @@ test("P-B final_above_10m: the field map owns the combined row (11-Nov-2026)", (
   );
   assert.equal(
     built.computations.surcharge.value,
-    0,
-    "the plan types nothing: one cell, one owner",
+    built.surcharge.normalTaxPart,
+    "normal component is retained for verification; the handled flag prevents typing",
   );
   assert.match(
     built.computations.surcharge.message,
@@ -208,7 +210,7 @@ test("P-B final_above_10m: the field map owns the combined row (11-Nov-2026)", (
   assert.equal(publishedRow.proven, false);
 });
 
-test("pension taxed at the normal slabs joins Taxable Income and keeps 10% here", () => {
+test("pension taxed at the normal slabs joins Taxable Income and gets the Salary-head 9% proviso", () => {
   const built = plan({
     businessExpectedIrisTotals: businessTotals(companion({ normalIncome: 5_000_000 })),
     pension: { treatment: "salary", annualPension: 5_000_000, surcharge: null },
@@ -216,7 +218,7 @@ test("pension taxed at the normal slabs joins Taxable Income and keeps 10% here"
   assert.ok(built);
   assert.equal(built.pension.normalIncome, 5_000_000);
   assert.equal(built.expectedTaxableIncome, 20_000_000);
-  assert.equal(built.surcharge.ratePercent, 10, "5M/20M is 25% of taxable income");
+  assert.equal(built.surcharge.ratePercent, 9, "normal-tax pension is Salary-head income even below the 75% slab test");
   assert.equal(built.surcharge.owner, "envelope");
 });
 

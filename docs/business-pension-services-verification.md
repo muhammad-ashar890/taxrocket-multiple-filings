@@ -42,7 +42,7 @@ Required invariants (all asserted by the two Route 7 suites):
 - `exact` may be true while `active` stays **false**: activation requires `snapshot.businessPensionServices.version === "business-pension-services-v1"` **and** `computations.version === "computations-v1"`. Opening the gate types nothing by itself.
 - `salaryIncluded` false, `pensionIncluded` **and** `businessIncluded` true; the section allowlist therefore opens Employment (`1008`, `tax_deductions`), the five Business tabs and `computations`.
 - **9100** = Business income + pension taxed at the normal slabs. Exempt pension and section 154A Services revenue never join it.
-- **923184** = pension final-tax surcharge + `section4ABRatePercent` of 920000. With no salary head the rate is **10%**, never 9%. A pension `final_above_10m` source makes the row `action: "USER"` (owner: operator) so the agent never types half of it; an exempt or salary-treated pension makes it `action: "TYPE"` (owner: envelope).
+- **923184** = pension final-tax surcharge + `section4ABRatePercent` of 920000. For the final-tax pension fixture the normal surcharge rate is **10%**. A positive final pension surcharge makes the field map the single write owner. Its combined value and components travel in the computations plan with `alreadyHandledInFieldMap: true`; the driver verifies the actual combined cell and both normal-tax bases without typing. `action: "TYPE"` retains a positive normal component for verification, or `NONE` when no normal surcharge is due. Neither means the field-map-owned row is typed again. Exempt/normal-tax pension cases without a final surcharge retain the existing envelope-owned path.
 - The envelope **refuses** (no envelope → no activation, packet aborts with a plain message) on: a normal-tax Services rupee, an unmapped portal source, an unknown pension answer, `final_above_10m` without its 5% figure, a Business packet with no combined 9100/920000.
 - Salary rows `1009` / `64020004` can never resolve on this route.
 
@@ -115,3 +115,14 @@ Without the branch the same suite fails 2 of 4, so the gap cannot silently retur
 - Route 7 has no salary head at all, so `923184 = 10% × 920000 = 584,000` is the correct TY2026
   figure and the envelope-owned (`action: "TYPE"`) path is the right one. Nothing in this fix changes
   a rate; it only delivers the plan that already computed it.
+
+
+## Four-income groundwork: combined-field-map readback regression
+
+`node --test scripts/verify-combined-field-map-readback.cjs` exercises the actual
+builders, map, desktop resolver and driver with synthetic IRIS snapshots. It also
+checks `fillComputations` with injected navigation/snapshot/fill functions (no
+browser): no second write, correct combined reporting, navigation failure, changed
+readback and below-threshold base mismatches. The four-income gate remains closed
+pending its dedicated calculation/packet/desktop contract. No live acceptance is
+claimed by these tests.

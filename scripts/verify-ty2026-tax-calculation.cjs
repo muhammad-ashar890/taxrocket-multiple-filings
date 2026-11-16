@@ -826,14 +826,14 @@ check(
   4_490_000,
 );
 check(
-  "Combined 10% surcharge above 10m on the clause (1) table (D4)",
+  "Salary-head 9% surcharge above 10m even on the clause (1) table",
   salaryPlusIndividualRent.surcharge,
-  449_000,
+  404_100,
 );
 check(
-  "Combined total is 4,939,000",
+  "Combined total is 4,894,100",
   salaryPlusIndividualRent.taxDue,
-  4_939_000,
+  4_894_100,
 );
 check(
   "The joint line stays assessable",
@@ -997,10 +997,10 @@ check(
   "ESTIMATE",
 );
 check(
-  // 4,490,000 + 10% surcharge (clause (1) table, D4) + 200,000 bank = 5,139,000
-  "Joint plus bank totals 5,139,000",
+  // 4,490,000 + 9% Salary-head surcharge + 200,000 bank = 5,094,100
+  "Joint plus bank totals 5,094,100",
   combinedPlusFlat.taxDue,
-  5_139_000,
+  5_094_100,
 );
 
 // --- Withholding and refunds across a mixed return -------------------------

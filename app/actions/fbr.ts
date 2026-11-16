@@ -9,6 +9,7 @@ import { validateAuthoritativeReconciliation } from "@/lib/tax/reconciliation-ca
 import { createNotification } from "@/app/actions/notifications";
 import { getFbrConnectionBlockers } from "@/lib/tax/filing-status";
 import { pensionPacketValidationError } from "@/lib/tax/pension-packet-validation";
+import { fourIncomePacketValidationError } from "@/lib/tax/four-income-packet-validation";
 
 export type FbrConnectionView = {
   id: string;
@@ -170,8 +171,11 @@ export async function startFbrConnectionAction(draftId: string) {
     }
 
     if (latestPacket?.snapshotJson) {
-      const pensionError = await pensionPacketValidationError(JSON.parse(latestPacket.snapshotJson), draft.id, draft.userId);
+      const snapshot = JSON.parse(latestPacket.snapshotJson);
+      const pensionError = await pensionPacketValidationError(snapshot, draft.id, draft.userId);
       if (pensionError) return { success: false, error: pensionError };
+      const fourIncomeError = await fourIncomePacketValidationError(snapshot, draft.id, draft.userId);
+      if (fourIncomeError) return { success: false, error: fourIncomeError };
     }
 
     const now = new Date();

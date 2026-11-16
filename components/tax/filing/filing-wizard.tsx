@@ -2094,7 +2094,7 @@ export function FilingWizard({
 
     if (navigationStepKey === "documents" && unsupportedServicesSelection) {
       setFilingActionError(
-        "Freelancer / Services supports only Tax Year 2026 Myself filings with Services alone, Salary + Services, Pension + Services, Business + Services, Salary + Business + Services, Salary + Pension + Services, or Business + Pension + Services. Return to Income sources and remove incompatible sources before continuing.",
+        "Freelancer / Services supports only Tax Year 2026 Myself filings with Services alone, Salary + Services, Pension + Services, Business + Services, Salary + Business + Services, Salary + Pension + Services, or Business + Pension + Services, or Salary + Business + Pension + Services. Return to Income sources and remove incompatible sources before continuing.",
       );
       return;
     }

@@ -115,8 +115,13 @@ test("the six sets that already worked keep working", () => {
 });
 
 test("everything else still fails closed", () => {
+  // The four-income set (Salary + Business + Pension + Services) is TY2026
+  // Myself-only and opened 16-Nov-2026; see verify-four-income-route.cjs.
+  assert.equal(
+    isFreelancerIncomeSelected({ incomeSources: ["salary", "business", "pension", "services"] }),
+    true,
+  );
   for (const sources of [
-    ["salary", "business", "pension", "services"],
     ["business", "pension"],
     ["salary", "business", "pension"],
     ["business", "pension", "services", "services"],

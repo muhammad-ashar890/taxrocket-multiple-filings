@@ -126,8 +126,17 @@ test("server gate preserves every other supported and blocked route boundary", (
       true,
     );
   }
+  // The four-income set (Salary + Business + Pension + Services) is a separate,
+  // TY2026 Myself-only route opened 16-Nov-2026; see verify-four-income-route.cjs.
+  assert.equal(
+    isSingleFreelancerServicesFiling({
+      taxYear: 2026,
+      filerType: "myself",
+      incomeSources: ["salary", "business", "pension", "services"],
+    }),
+    true,
+  );
   for (const input of [
-    { incomeSources: ["salary", "business", "pension", "services"] },
     { incomeSources: ["salary", "business", "services", "services"] },
     { incomeSources: targetSources, taxYear: 2025 },
     { incomeSources: targetSources, filerType: "my_business" },

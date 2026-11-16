@@ -210,7 +210,57 @@ function decideComputations(plan, rows) {
     if (Math.abs(iris.taxChargeable - (iris.normalTax + computed + superTax)) > 1) return null;
     return { value: computed, ratePercent };
   })();
-  const surcharge = s.alreadyHandledInFieldMap === true
+  // Opt-in combined field-map contract. Invalid metadata must never fall back
+  // to the legacy handled-flag path (which does not verify the combined cell).
+  const hasCombinedContract = Object.prototype.hasOwnProperty.call(s, "fieldMapCombinedValue") ||
+    Object.prototype.hasOwnProperty.call(s, "pensionSurchargePart");
+  const combinedReadback = (() => {
+    if (!hasCombinedContract) return null;
+    const combined = s.fieldMapCombinedValue;
+    const pension = s.pensionSurchargePart;
+    const normal = s.value;
+    const tell = (reason, detail) => ({
+      code: SURCHARGE_CODE,
+      label: s.label || SURCHARGE_CODE,
+      value: known(combined) ? combined : 0,
+      decision: DECISION.TELL_USER,
+      reason,
+      message: `Surcharge (row 923184): ${detail} Nothing was typed by the computations driver; review the approved packet and IRIS row.`,
+    });
+    if (s.alreadyHandledInFieldMap !== true ||
+        !["TYPE", "NONE"].includes(s.action) || ![9, 10].includes(s.ratePercent) ||
+        !Number.isInteger(combined) || combined <= 0 ||
+        !Number.isInteger(pension) || pension < 0 ||
+        !Number.isInteger(normal) || normal < 0 ||
+        (s.action === "TYPE" ? normal <= 0 : normal !== 0) ||
+        Math.abs(pension + normal - combined) > 1)
+      return tell("plan_components_inconsistent", "The combined field-map ownership, rate or surcharge components are invalid/inconsistent.");
+    if (!byCode.has(SURCHARGE_CODE)) return tell("row_not_seen", "The surcharge row was not seen.");
+    if (byCode.get(SURCHARGE_CODE) === null) return tell("row_not_unique", "More than one surcharge row was seen.");
+    if (!cellOf(SURCHARGE_CODE, COLUMN.total)) return tell("cell_not_seen", "The Total Income cell was not seen.");
+    if (Number.isNaN(iris.surchargeTotal)) return tell("cell_not_an_amount", "The surcharge cell is not an amount.");
+    // Both bases must match even at/below the threshold, when the cell holds
+    // only the pension part. A correct-looking cell is not proof of fresh bases.
+    if (!known(plan.expectedTaxableIncome) || !known(plan.expectedNormalTax) ||
+        !known(iris.taxableIncome) || !known(iris.normalTax))
+      return tell("iris_base_unreadable", "Taxable Income (9100) or Normal Tax (920000) is unreadable or absent from the approved plan.");
+    const fromIris = iris.taxableIncome > SURCHARGE_THRESHOLD
+      ? Math.round(iris.normalTax * s.ratePercent / 100) : 0;
+    if (iris.taxableIncome < 0 || iris.normalTax < 0 ||
+        iris.taxableIncome !== plan.expectedTaxableIncome ||
+        iris.normalTax !== plan.expectedNormalTax ||
+        Math.abs(fromIris - normal) > 1)
+      return tell("iris_base_differs", `IRIS Taxable Income ${rupees(iris.taxableIncome)} / Normal Tax ${rupees(iris.normalTax)} does not verify the approved bases ${rupees(plan.expectedTaxableIncome)} / ${rupees(plan.expectedNormalTax)} and normal surcharge ${rupees(normal)}.`);
+    const current = iris.surchargeTotal;
+    if (!known(current)) return tell("field_map_cell_blank", `The surcharge cell is blank; the approved combined amount is ${rupees(combined)}.`);
+    if (Math.abs(current - combined) <= 1)
+      return { code: SURCHARGE_CODE, label: s.label || SURCHARGE_CODE, value: combined,
+        decision: DECISION.LEAVE, reason: "combined_verified_in_field_map", current };
+    if (normal > 0 && Math.abs(current - pension) <= 1)
+      return tell("field_map_missing_normal_half", `IRIS holds the pension part ${rupees(current)} only; the approved combined amount is ${rupees(combined)}.`);
+    return tell("row_holds_other_figure", `IRIS holds ${rupees(current)}, but the approved combined amount is ${rupees(combined)}. Existing figures are not overwritten.`);
+  })();
+  const surcharge = combinedReadback || (s.alreadyHandledInFieldMap === true
     ? (() => {
         if (s.action === "TYPE") {
           if (!known(iris.taxableIncome) || !known(iris.normalTax)) {
@@ -246,7 +296,7 @@ function decideComputations(plan, rows) {
           iris.taxableIncome > SURCHARGE_THRESHOLD
         ) {
           const hint = known(iris.normalTax)
-            ? `10% of IRIS's Normal Tax ${rupees(iris.normalTax)} is ${rupees(iris.normalTax * 0.1)}; 9% (only when salary is more than 75% of taxable income) is ${rupees(iris.normalTax * 0.09)}.`
+            ? `10% of IRIS's Normal Tax ${rupees(iris.normalTax)} is ${rupees(iris.normalTax * 0.1)}; 9% (where the Section 4AB Salary-head proviso applies) is ${rupees(iris.normalTax * 0.09)}.`
             : "";
           return {
             code: SURCHARGE_CODE,
@@ -287,7 +337,7 @@ function decideComputations(plan, rows) {
       };
     }
     const above = iris.taxableIncome > SURCHARGE_THRESHOLD;
-    const hint = `10% of IRIS's Normal Tax ${rupees(iris.normalTax)} is ${rupees(iris.normalTax * 0.1)}; 9% (only when salary is more than 75% of taxable income) is ${rupees(iris.normalTax * 0.09)}.`;
+    const hint = `10% of IRIS's Normal Tax ${rupees(iris.normalTax)} is ${rupees(iris.normalTax * 0.1)}; 9% (where the Section 4AB Salary-head proviso applies) is ${rupees(iris.normalTax * 0.09)}.`;
     if (s.action === "TYPE") {
       if (!above)
         return {
@@ -309,7 +359,7 @@ function decideComputations(plan, rows) {
         message: `Surcharge (row 923184): IRIS's Taxable Income (9100) is ${rupees(iris.taxableIncome)}, above PKR 10 million, but TaxRocket expected no surcharge. Nothing was typed; please check the return and type the surcharge yourself. ${hint}`,
       };
     return { reason: "taxpayer_types_it", message: `${s.message} ${hint}` };
-  });
+  }));
 
   const t = plan.superTax;
   const superTax = decide(t, () => {
@@ -378,7 +428,7 @@ async function fillComputations(windowInstance, plan, options = {}) {
   if (problems.length)
     return { ok: false, reason: `plan_refused: ${problems.join(", ")}`, results: [], messages: [], decisions: [] };
   const turnoverPlan = plan.turnover || null;
-  const typing = [plan.surcharge, plan.superTax].filter((entry) => entry.action === "TYPE");
+  const typing = [plan.surcharge, plan.superTax].filter((entry) => entry.action === "TYPE" && entry.alreadyHandledInFieldMap !== true);
   const turnoverTyping = Boolean(turnoverPlan && turnoverPlan.action === "TYPE");
   if (mode !== "live")
     return {
@@ -397,9 +447,11 @@ async function fillComputations(windowInstance, plan, options = {}) {
       ? [turnoverPlan.action === "TYPE" ? turnoverByHand(turnoverPlan, "the agent could not open IRIS's Computations tab") : turnoverPlan.message]
       : []),
     ...[plan.surcharge, plan.superTax]
-      .filter((entry) => entry.action !== "NONE")
+      .filter((entry) => entry.action !== "NONE" || entry.fieldMapCombinedValue !== undefined)
       .map((entry) =>
-        entry.action === "TYPE"
+        entry.fieldMapCombinedValue !== undefined
+          ? `${entry.label} (row ${entry.code}): the Computations tab could not be opened, so the field-map combined amount ${rupees(entry.fieldMapCombinedValue)} could not be verified. Review the complete row; do not add a normal-tax half again.`
+          : entry.action === "TYPE"
           ? `${entry.label} (row ${entry.code}): the agent could not open IRIS's Computations tab, so please type ${rupees(entry.value)} yourself (${entry.basis}).`
           : entry.message,
       ),
@@ -520,12 +572,12 @@ async function fillComputations(windowInstance, plan, options = {}) {
   const typedOk = results.every((r) => ["filled", "already_correct"].includes(r.status));
   return {
     ok: typedOk && messages.length === 0,
-    reason: messages.length ? "left_for_taxpayer" : typing.length || turnoverTyping ? "typed" : "nothing_due",
+    reason: messages.length ? "left_for_taxpayer" : decided.entries.some(entry => entry.reason === "combined_verified_in_field_map") && !results.length ? "verified_read_only" : typing.length || turnoverTyping ? "typed" : "nothing_due",
     results,
     messages,
     decisions: [
       ...(turnover ? [{ code: turnover.code, decision: turnover.decision, reason: turnover.ensure }] : []),
-      ...decided.entries.map(({ code, decision, reason }) => ({ code, decision, reason })),
+      ...decided.entries.map(({ code, decision, reason, current }) => ({ code, decision, reason, ...(known(current) ? { current } : {}) })),
     ],
     iris: decided.iris,
     ...(turnover ? { turnover } : {}),
@@ -541,6 +593,9 @@ function describeComputationsOutcome(outcome) {
   if (already.length) parts.push(`already correct: ${already.join(", ")}`);
   if ((outcome.decisions || []).some((d) => d.reason === "iris_computed_in_normal_column"))
     parts.push(`surcharge already computed by IRIS in Subject to Normal Tax${known(outcome.iris && outcome.iris.surchargeNormal) ? ` (${rupees(outcome.iris.surchargeNormal)})` : ""}; nothing typed`);
+  const verifiedCombined = (outcome.decisions || []).find(d => d.reason === "combined_verified_in_field_map");
+  if (verifiedCombined)
+    parts.push(`surcharge row 923184 verified against the packet's field map (${rupees(verifiedCombined.current)}); nothing typed by computations`);
   if ((outcome.messages || []).length) parts.push(`${outcome.messages.length} item(s) left for you to type (see the messages)`);
   if (outcome.turnover && outcome.turnover.added) parts.unshift(`turnover row ${outcome.turnover.code} added through "+ Turnover"`);
   if (!parts.length) parts.push(outcome.reason === "nothing_due" ? "no surcharge or super tax is due on these figures; nothing typed" : outcome.reason);

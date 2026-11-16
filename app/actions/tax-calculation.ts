@@ -53,7 +53,9 @@ import {
   isBusinessBankCategory,
   isMyselfBusinessBankFlow,
   isSingleFreelancerServicesFiling,
+  isFourIncomeFiling,
 } from "@/lib/tax/business-bank-categories";
+import { FOUR_INCOME_RULES_VERSION } from "@/lib/tax/four-income-plan";
 import { isGiftCategory } from "@/lib/tax/gift-income";
 import { resolveSalaryTaxableIncome } from "@/lib/tax/salary-certificate-fields";
 import { createNotification } from "@/app/actions/notifications";
@@ -341,7 +343,7 @@ export async function calculateTaxAction(
         ? "A Services invoice document has changed since it was mapped. Review and approve its current invoice fields before calculating."
         : null;
     const servicesRouteProblem = incomeSources.includes("services") && !freelancerEnabled
-      ? "Freelancer / Services evidence supports only TY2026 Myself filings with Services alone, exactly Salary + Services, exactly Pension + Services, exactly Business + Services, or exactly Salary + Business + Services, or exactly Salary + Pension + Services, or exactly Business + Pension + Services. Other source combinations remain unsupported, so no Services tax estimate was made."
+      ? "Freelancer / Services evidence supports only TY2026 Myself filings with Services alone, exactly Salary + Services, exactly Pension + Services, exactly Business + Services, or exactly Salary + Business + Services, or exactly Salary + Pension + Services, or exactly Business + Pension + Services, or exactly Salary + Business + Pension + Services. Other source combinations remain unsupported, so no Services tax estimate was made."
       : null;
     const servicesEvidenceProblem =
       servicesRouteProblem ??
@@ -553,10 +555,15 @@ export async function calculateTaxAction(
         for (const subcategory of selected) {
           const income = servicesIncomeBySubcategory[subcategory] ?? 0;
           if (income > 0) {
+            const decision = selectionDetails.get(`${entry.source}\u0000${subcategory}`);
             flatRouteSources.push({
               route: entry.route,
               income,
               subcategory,
+              attributes: {
+                services154AFinalTaxConfirmed:
+                  decision?.services154AFinalTaxConfirmed === true,
+              },
             });
           }
         }
@@ -865,7 +872,11 @@ export async function calculateTaxAction(
       ...(minimumTax113Input ? { minimumTax113: minimumTax113Input } : {}),
     });
 
-    const blockedNote = pensionSourceProblem ?? (
+    const fourIncomeProblem = isFourIncomeFiling(draft) &&
+      estimate.breakdown.some(line => line.route === "services" && !line.isFinalTax)
+      ? "Four-income filing currently supports evidenced final-tax Services only. Normal/mixed Services needs reviewed taxable-profit, expense mapping and applicable credit/minimum-tax support; no executable packet can be approved."
+      : null;
+    const blockedNote = fourIncomeProblem ?? pensionSourceProblem ?? (
       businessProfitProblem !== null
         ? businessProfitProblem
         : servicesAllocationProblem !== null
@@ -884,6 +895,7 @@ export async function calculateTaxAction(
     // reports NEEDS_USER_INPUT so the taxpayer is asked for their homework
     // instead of being told the rules do not exist.
     const blockedByUserInput =
+      fourIncomeProblem !== null ||
       pensionSourceProblem !== null ||
       activityDetailProblems.length > 0 ||
       flatRoutesNeedingSplit.length > 0 ||
@@ -939,6 +951,7 @@ export async function calculateTaxAction(
         surcharge: line.surcharge,
         calculatedTax: line.taxDue,
         detailsJson: JSON.stringify({
+          ...(isFourIncomeFiling(draft) ? { calculationPolicy: FOUR_INCOME_RULES_VERSION } : {}),
           rateShape: line.rateShape,
           isFinalTax: line.isFinalTax,
           appliedRuleIds: line.appliedRuleIds,

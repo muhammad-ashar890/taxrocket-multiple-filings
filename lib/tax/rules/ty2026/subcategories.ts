@@ -119,6 +119,13 @@ export type Ty2026SelectionUserDetails = {
   /** Equity-derived portion of a composite mutual-fund dividend. */
   equityPortion?: number;
   /**
+   * Section 154A: human confirmation that this export Services income is
+   * eligible for, and subject to, final tax (return filed; withholding- and,
+   * where applicable, sales-tax statements; PSEB registration/certification
+   * for the 0.25% IT/ITES row; no opt-out exercised for TY2026).
+   */
+  services154AFinalTaxConfirmed?: boolean;
+  /**
    * Business profit figures (Myself filing, "Business profit" step). Yearly
    * PKR amounts; see lib/tax/business-profit.ts for how they combine.
    */
@@ -197,6 +204,7 @@ export type Ty2026DetailFieldKey =
   | "worksForFormerEmployerOrAssociate"
   | "debtPortion"
   | "equityPortion"
+  | "services154AFinalTaxConfirmed"
   | "businessGrossSales"
   | "businessOtherRevenue"
   | "businessCostOfSales"
@@ -402,9 +410,23 @@ const VEHICLE_AGE_YEARS_FIELD: Ty2026DetailField = {
  * single-episode TV-play row is a fixed charge, and the intentionally
  * unpriced rows stop with NEEDS_RULES however much is declared.
  */
+const SERVICES_154A_FINAL_TAX_FIELD: Ty2026DetailField = {
+  key: "services154AFinalTaxConfirmed",
+  label:
+    "Section 154A final tax: this export Services income qualifies for and is subject to FINAL tax",
+  hint:
+    "Tick only if all conditions hold: the export Services income is its own business head; return filed; required withholding (and, where applicable, sales-tax) statements filed; PSEB registration and certification in place for the 0.25% IT/ITES row; and you have NOT opted out of final taxation for TY2026 (the option must be exercised in the return each year). If any condition fails, do not tick: the receipt is taxable under the normal regime and needs professional review.",
+  required: true,
+  min: 0,
+  wholeNumber: false,
+  checkbox: true,
+};
+
 const DETAIL_FIELDS_BY_SELECTION: Readonly<
   Record<string, readonly Ty2026DetailField[]>
 > = {
+  "services:export-it-ites-pseb": [SERVICES_154A_FINAL_TAX_FIELD],
+  "services:export-services-other": [SERVICES_154A_FINAL_TAX_FIELD],
   // Section 148 — every priced import row is a percentage of import value.
   "imports:part-i": [
     pkrAmount(
@@ -783,6 +805,7 @@ const DETAIL_KEYS: readonly Ty2026DetailFieldKey[] = [
 
 /** Detail keys that carry a yes/no answer rather than a number. */
 const BOOLEAN_DETAIL_KEYS: readonly Ty2026DetailFieldKey[] = [
+  "services154AFinalTaxConfirmed",
   "isSmartphone",
   "businessSalesExcludeIndirectTax",
   "businessTurnover100mEarlierYear",
