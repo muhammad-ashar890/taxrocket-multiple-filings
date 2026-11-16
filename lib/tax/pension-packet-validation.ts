@@ -174,11 +174,57 @@ export async function pensionPacketValidationError(
           : [];
       const hasUnmappedPortalIncome =
         (detailed?.mappingGaps?.unmappedCategories?.length ?? 0) > 0;
+      // A filing that also carries mapped Services income types only the
+      // pension half of 923184: the salary-slab half of the Section 4AB
+      // surcharge is not proven for that combination, so `packet.ts` feeds the
+      // mapped Services total into this same resolver and stores no
+      // `normalSlabSurcharge` hint. Recompute with those identical inputs —
+      // read off the pinned field map, never re-guessed from the database — or
+      // this check demands a summed 923184 that the packet is designed to hold
+      // back (live job cmweo3f4x00is1e710btiaxn2: packet v6 was refused with
+      // "contract is incomplete" before the desktop could raise its own
+      // named-row pause).
+      const mappedServicesIncomePkr = sumMoney(
+        (Array.isArray(detailed?.businessFields)
+          ? detailed.businessFields
+          : []
+        )
+          .filter(
+            (field: any) =>
+              String(field?.column ?? "") === "Total Amount" &&
+              // Services rows only — a Business packet's own revenue rows also
+              // sit in `businessFields`, and those are priced by the business
+              // computations branch, never by this Services rule.
+              String(field?.servicesMappingKind ?? "").startsWith("SERVICES"),
+          )
+          .map((field: any) => Number(field?.ourAmount ?? field?.value ?? 0)),
+      );
+      const hasServicesIncomeGaps =
+        (snapshot?.coverage?.unmappedSources?.length ?? 0) > 0;
+      // Mapped 154A export revenue is final tax, so it does not block the
+      // salary-slab half. The packet writes that slice as a "Subject to Final
+      // Tax" cell on the same revenue row, so it can be read straight off the
+      // pinned field map without re-deriving the statutory section.
+      const mappedFinalTaxServicesIncomePkr = sumMoney(
+        (Array.isArray(detailed?.businessFields)
+          ? detailed.businessFields
+          : []
+        )
+          .filter(
+            (field: any) =>
+              String(field?.column ?? "") === "Subject to Final Tax" &&
+              String(field?.servicesMappingKind ?? "").startsWith("SERVICES"),
+          )
+          .map((field: any) => Number(field?.ourAmount ?? field?.value ?? 0)),
+      );
       const expectedNormalSurcharge =
         resolveFinalPensionAdditionalNormalSurcharge({
           incomeSources: liveSources,
           pensionTreatment: treatment,
           calculationLines: calcLines,
+          mappedServicesIncomePkr,
+          mappedFinalTaxServicesIncomePkr,
+          hasServicesIncomeGaps,
           hasUnmappedPortalIncome,
           businessExpectedComputations:
             snapshot?.business?.expectedIrisTotals?.computations ?? null,

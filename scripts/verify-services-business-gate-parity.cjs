@@ -3,7 +3,7 @@
 //
 // The supported-source-set rule is written by hand in three places (the packet
 // gate, the packet builder and the desktop agent). This test pins that all three
-// accept the same four sets, so widening one without the others fails here
+// accept the same five sets, so widening one without the others fails here
 // instead of producing a packet the agent refuses to open.
 //
 // It reads the source files only; it never imports the app.
@@ -29,9 +29,12 @@ const REQUIRED_MENTIONS = [
   "Salary + Services",
   "Pension + Services",
   "Business + Services",
+  "Salary + Business + Services",
+  "Salary + Pension + Services",
+  "Business + Pension + Services",
 ];
 
-test("every Freelancer / Services gate names the same four source sets", () => {
+test("every Freelancer / Services gate names the same seven source sets", () => {
   for (const file of GATE_FILES) {
     const source = read(file);
     for (const label of REQUIRED_MENTIONS) {
@@ -59,12 +62,17 @@ test("the packet gate and the desktop agent accept Business + Services", () => {
   );
   assert.match(
     agent,
-    /servicesOnly \|\| salaryAndServices \|\| pensionAndServices \|\| businessAndServices/,
+    /servicesOnly \|\|\s*\n?\s*salaryAndServices \|\|\s*\n?\s*pensionAndServices \|\|\s*\n?\s*businessAndServices/,
     "the agent's `exact` check must include businessAndServices",
   );
   assert.match(
     agent,
-    /businessIncluded: businessAndServices/,
+    /salaryPensionAndServices \|\|\s*\n?\s*businessPensionAndServices/,
+    "the agent's `exact` check must include the Business + Pension + Services set",
+  );
+  assert.match(
+    agent,
+    /businessIncluded:\s*\n?\s*businessAndServices/,
     "the agent must report businessIncluded so downstream phases can branch on it",
   );
 });
@@ -82,24 +90,17 @@ test("Business + Services is named by every gate file, code or message", () => {
   }
 });
 
-test("P2 leaves the setup-screen block in place (the unlock lands with P3)", () => {
-  // Deliberate: widening the gates without the combined payload would let a
-  // taxpayer build an F+B filing that only ever pauses in the agent. The alert
-  // in wizard-setup-step.tsx and the flag in filing-wizard.tsx must stay
-  // untouched until the payload shape lands, and neither may advertise
-  // Business + Services as selectable yet.
+test("setup names every supported route and retains the unsupported-combination block", () => {
   const wizard = read("components/tax/filing/filing-wizard.tsx");
   assert.ok(
     wizard.includes("unsupportedServicesSelection"),
-    "filing-wizard.tsx must still carry the unsupportedServicesSelection block",
+    "filing-wizard.tsx must retain the unsupportedServicesSelection block",
   );
   for (const file of ["components/tax/filing/filing-wizard.tsx",
                       "components/tax/filing/wizard-setup-step.tsx"]) {
-    if (!fs.existsSync(path.join(root, ...file.split("/")))) continue;
-    assert.ok(
-      !read(file).includes("Business + Services"),
-      `${file} must not advertise Business + Services before P3`,
-    );
+    const source = read(file);
+    assert.ok(source.includes("Business + Services"), `${file} must name Business + Services`);
+    assert.ok(source.includes("Salary + Business + Services"), `${file} must name Salary + Business + Services`);
   }
 });
 

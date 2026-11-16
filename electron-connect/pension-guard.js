@@ -90,9 +90,19 @@ function pensionEntryHold(snapshot) {
         snapshot?.business?.expectedIrisTotals?.computations ?? null;
       const expectedBusinessNormalSurcharge = (() => {
         if (!includesBusiness || hasUnmappedPortalIncome) return 0;
+        // 11-Nov-2026: mirror of the server rule in
+        // lib/tax/non-business-computations-plan.ts. `services` is admitted
+        // only after the unmapped-income check above, i.e. only when every
+        // Services rupee is final-tax (154A, outside Division I) and therefore
+        // cannot disturb the normal-slab half of 923184. Keep the two lists
+        // identical: scripts/verify-bps-combined-surcharge.cjs fails if they drift.
         if (
           !incomeSources.every(
-            (s) => s === "business" || s === "salary" || s === "pension",
+            (s) =>
+              s === "business" ||
+              s === "salary" ||
+              s === "pension" ||
+              s === "services",
           )
         ) {
           return 0;
@@ -142,7 +152,26 @@ function pensionEntryHold(snapshot) {
         (normalSurchargeValid && rawNormalSurcharge !== undefined
           ? rawNormalSurcharge
           : 0);
-      if (
+      // Salary + Pension + Services (and any other salary companion above the
+      // threshold): the packet types only the pension's own Section 4AB
+      // surcharge, because the salary-slab half of IRIS's 923184 is not proven
+      // for this combination yet. Fail closed with the cells named instead of
+      // the generic "regenerate the packet" wording — the packet is correct,
+      // the summed surcharge is simply unverified.
+      const salarySurchargeUnproven =
+        includesSalary &&
+        !hasUnmappedPortalIncome &&
+        salaryGrossRow !== null &&
+        Number.isFinite(salaryGrossRow) &&
+        salaryGrossRow > 10_000_000 &&
+        rawNormalSurcharge === undefined &&
+        annual > 10_000_000 &&
+        fingerprintMatches;
+
+      if (salarySurchargeUnproven) {
+        message =
+          "The Salary gross on 1009 is above PKR 10 million, so IRIS row 923184 must carry the pension Section 4AB surcharge plus the salary-slab Section 4AB surcharge, and this packet does not prove that summed figure yet. Nothing was changed in FBR. Check IRIS's own 923184 after it recalculates and enter the exact figure yourself, or file without Freelancer / Services until the summed surcharge is verified.";
+      } else if (
         !(annual > 10_000_000) ||
         !fingerprintMatches ||
         !normalSurchargeValid ||

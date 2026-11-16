@@ -295,7 +295,7 @@ async function saveReturnDraft(windowInstance, options = {}) {
   outcome.at = new Date().toISOString();
   onStep(
     "iris_save_clicked",
-    "The agent pressed Save in IRIS (the lower-bar Save button). Submit, Calculate and payment were not touched.",
+    "The agent pressed Save in IRIS (the lower-bar Save button). Submit and payment were not touched.",
   );
   // Toasts can vanish quickly: every poll is kept.
   const seen = [];

@@ -58,6 +58,16 @@ export function resolveFinalPensionAdditionalNormalSurcharge(input: {
   pensionTreatment?: string | null;
   calculationLines: readonly CalculationLineForComputations[];
   mappedServicesIncomePkr?: number;
+  /**
+   * The part of `mappedServicesIncomePkr` that carries a final-tax regime
+   * (section 154A export of services). Final-tax revenue is taxed outside
+   * Division I of Part I of the First Schedule, so it neither joins the salary
+   * slabs nor attracts the section 4AB surcharge: it must not suppress the
+   * salary-slab half of IRIS row 923184 the way unmapped or normal-regime
+   * Services income does. Left undefined by callers that cannot prove the
+   * regime, which keeps the old fail-closed behaviour.
+   */
+  mappedFinalTaxServicesIncomePkr?: number;
   hasServicesIncomeGaps?: boolean;
   hasUnmappedPortalIncome?: boolean;
   businessExpectedComputations?: {
@@ -76,8 +86,21 @@ export function resolveFinalPensionAdditionalNormalSurcharge(input: {
     String(s).trim().toLowerCase(),
   );
   if (input.pensionTreatment !== "final_above_10m") return 0;
+  // Services income only blocks this sum when the packet cannot place it:
+  // unmapped revenue, a reported gap, or revenue that is still inside the
+  // normal slabs. Mapped 154A export revenue is final tax and leaves the
+  // salary-slab surcharge untouched (FBR WHT Rate Card, FA2025: the salary row
+  // is "…& surcharge @ 9%", the 154A row carries no surcharge at all).
+  const mappedServicesPkr = Math.max(
+    0,
+    Math.round(toMoney(input.mappedServicesIncomePkr)),
+  );
+  const mappedFinalTaxServicesPkr = Math.min(
+    mappedServicesPkr,
+    Math.max(0, Math.round(toMoney(input.mappedFinalTaxServicesIncomePkr))),
+  );
   if (
-    Math.max(0, Math.round(toMoney(input.mappedServicesIncomePkr))) > 0 ||
+    mappedServicesPkr - mappedFinalTaxServicesPkr > 0 ||
     input.hasServicesIncomeGaps ||
     input.hasUnmappedPortalIncome
   ) {
@@ -85,9 +108,24 @@ export function resolveFinalPensionAdditionalNormalSurcharge(input: {
   }
 
   if (sources.includes("business")) {
+    // 11-Nov-2026: `services` is admitted to the sum — but only this far into
+    // the function, which means every Services rupee is already proven
+    // final-tax: the guard above returns 0 for normal-regime Services revenue,
+    // a reported income gap or any unmapped portal income. Section 154A export
+    // revenue is taxed outside Division I of Part I of the First Schedule (FBR
+    // WHT rate card, FA2025: the 154A row carries no surcharge), so it cannot
+    // change the normal-slab half of row 923184. Without this, the combined
+    // Business + Pension + Services return carried only the pension half in
+    // the field map and the whole row was parked with the operator.
+    // The desktop repeats this list in electron-connect/pension-guard.js —
+    // both copies are asserted together by scripts/verify-bps-combined-surcharge.cjs.
     if (
       !sources.every(
-        (s) => s === "business" || s === "salary" || s === "pension",
+        (s) =>
+          s === "business" ||
+          s === "salary" ||
+          s === "pension" ||
+          s === "services",
       )
     ) {
       return 0;

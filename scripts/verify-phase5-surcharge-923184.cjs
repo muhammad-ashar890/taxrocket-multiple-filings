@@ -336,6 +336,84 @@ test("Salary > 10M + Pension final_above_10M combines both Section 4AB surcharge
   assert.ok(pensionEntryHold(stale), "desktop guard must refuse stale final_above_10m packet missing Salary >10M surcharge");
 });
 
+test("Mapped 154A final-tax Services revenue keeps the salary-slab half of 923184; normal-regime or unproven Services still blocks it", () => {
+  // FBR WHT Rate Card (FA2025): the salary row carries "& surcharge @ 9%",
+  // the 154A export row carries no surcharge at all — final-tax revenue is
+  // outside Division I of Part I, so it cannot block the salary half.
+  const base = {
+    incomeSources: ["salary", "pension", "services"],
+    pensionTreatment: "final_above_10m",
+    calculationLines: [
+      {
+        source: "salary",
+        surcharge: 320_040,
+        detailsJson: JSON.stringify({ isFinalTax: false }),
+      },
+      {
+        source: "services",
+        surcharge: 4_500,
+        detailsJson: JSON.stringify({ isFinalTax: true }),
+      },
+      {
+        source: "pension",
+        surcharge: 10_000,
+        detailsJson: JSON.stringify({ isFinalTax: true }),
+      },
+    ],
+  };
+
+  // 1) Mapped Services revenue with no proven regime → unchanged fail-closed.
+  assert.equal(
+    resolveFinalPensionAdditionalNormalSurcharge({
+      ...base,
+      mappedServicesIncomePkr: 1_800_000,
+    }),
+    0,
+  );
+
+  // 2) The same revenue proven 154A final tax → the salary-slab half is claimable.
+  assert.equal(
+    resolveFinalPensionAdditionalNormalSurcharge({
+      ...base,
+      mappedServicesIncomePkr: 1_800_000,
+      mappedFinalTaxServicesIncomePkr: 1_800_000,
+    }),
+    320_040,
+  );
+
+  // 3) A normal-regime slice of Services still blocks the sum.
+  assert.equal(
+    resolveFinalPensionAdditionalNormalSurcharge({
+      ...base,
+      mappedServicesIncomePkr: 2_100_000,
+      mappedFinalTaxServicesIncomePkr: 1_800_000,
+    }),
+    0,
+  );
+
+  // 4) A reported Services income gap still blocks the sum.
+  assert.equal(
+    resolveFinalPensionAdditionalNormalSurcharge({
+      ...base,
+      mappedServicesIncomePkr: 1_800_000,
+      mappedFinalTaxServicesIncomePkr: 1_800_000,
+      hasServicesIncomeGaps: true,
+    }),
+    0,
+  );
+
+  // 5) Unmapped portal income still blocks the sum.
+  assert.equal(
+    resolveFinalPensionAdditionalNormalSurcharge({
+      ...base,
+      mappedServicesIncomePkr: 1_800_000,
+      mappedFinalTaxServicesIncomePkr: 1_800_000,
+      hasUnmappedPortalIncome: true,
+    }),
+    0,
+  );
+});
+
 test("Services / Salary + Services / Pension + Services > PKR 10M emit safe USER or TYPE plans and support scoped readback", async () => {
   // 1) Salary 8M + mapped Services 4M = 12M (> 10M in IRIS 9100): emits USER plan.
   const salary8m = calculateTaxEstimate({

@@ -43,16 +43,72 @@ function readIncomeSources(value: string | string[] | null | undefined): string[
 }
 
 /**
- * Freelancer / Services automation supports exactly four source sets:
- * Services alone, Salary + Services, Pension + Services, and Business +
- * Services. All other combinations (including a third income source) remain
- * fail-closed. Compare sets rather than array order because the prerequisite
- * screen does not promise a stable order for selected sources.
+ * Freelancer / Services automation supports exactly seven source sets:
+ * Services alone, Salary + Services, Pension + Services, Business + Services,
+ * Salary + Business + Services, Salary + Pension + Services, and Business +
+ * Pension + Services. All other combinations remain fail-closed.
+ * Compare sets rather than array order because the prerequisite screen does
+ * not promise a stable order for selected sources.
  *
  * The Business + Services set unlocks the gates only: Services rows and the
  * Business payload still travel through separate code paths, so the packet
  * builder and the desktop agent keep their own per-source checks.
  */
+export function isSalaryBusinessServicesSourceSet(
+  incomeSources?: string | string[] | null,
+) {
+  const sources = readIncomeSources(incomeSources);
+  if (new Set(sources).size !== sources.length) return false;
+  const normalized = [...sources].sort();
+  return (
+    normalized.length === 3 &&
+    normalized[0] === "business" &&
+    normalized[1] === "salary" &&
+    normalized[2] === "services"
+  );
+}
+
+/**
+ * Salary + Pension + Services — the pension twin of the Salary + Business +
+ * Services triple: same Services envelope, with the reviewed pension source in
+ * place of the Business packet. Compared as a set because the setup screen does
+ * not promise a selection order.
+ */
+export function isSalaryPensionServicesSourceSet(
+  incomeSources?: string | string[] | null,
+) {
+  const sources = readIncomeSources(incomeSources);
+  if (new Set(sources).size !== sources.length) return false;
+  const normalized = [...sources].sort();
+  return (
+    normalized.length === 3 &&
+    normalized[0] === "pension" &&
+    normalized[1] === "salary" &&
+    normalized[2] === "services"
+  );
+}
+
+/**
+ * Business + Pension + Services — the Business triple without Salary. The
+ * Services envelope travels as usual; the Business packet keeps its slot and
+ * the reviewed pension source rides beside it, so this set needs its own
+ * versioned computations envelope (`business-pension-services-v1`) before the
+ * agent may activate — the gate alone never types anything.
+ */
+export function isBusinessPensionServicesSourceSet(
+  incomeSources?: string | string[] | null,
+) {
+  const sources = readIncomeSources(incomeSources);
+  if (new Set(sources).size !== sources.length) return false;
+  const normalized = [...sources].sort();
+  return (
+    normalized.length === 3 &&
+    normalized[0] === "business" &&
+    normalized[1] === "pension" &&
+    normalized[2] === "services"
+  );
+}
+
 export function isFreelancerIncomeSelected(input: {
   incomeSources?: string | string[] | null;
 }) {
@@ -69,7 +125,10 @@ export function isFreelancerIncomeSelected(input: {
       normalized[1] === "services") ||
     (normalized.length === 2 &&
       normalized[0] === "pension" &&
-      normalized[1] === "services")
+      normalized[1] === "services") ||
+    isSalaryBusinessServicesSourceSet(sources) ||
+    isSalaryPensionServicesSourceSet(sources) ||
+    isBusinessPensionServicesSourceSet(sources)
   );
 }
 
@@ -85,6 +144,36 @@ export function isPensionOnlyFiling(input: {
 }) {
   const sources = readIncomeSources(input.incomeSources);
   return sources.length === 1 && sources[0] === "pension";
+}
+
+export function isSalaryBusinessServicesFiling(input: {
+  taxYear?: number;
+  filerType?: string | null;
+  incomeSources?: string | string[] | null;
+}) {
+  return (
+    input.taxYear === 2026 &&
+    input.filerType === "myself" &&
+    isSalaryBusinessServicesSourceSet(input.incomeSources)
+  );
+}
+
+/**
+ * Full gate for Route 7 — Business + Pension + Services (no Salary), TY2026
+ * Myself. The set predicate alone only opens the door: the desktop resolver
+ * also needs the `business-pension-services-v1` envelope this gate does not
+ * produce, so a filing that passes here still types nothing by itself.
+ */
+export function isBusinessPensionServicesFiling(input: {
+  taxYear?: number;
+  filerType?: string | null;
+  incomeSources?: string | string[] | null;
+}) {
+  return (
+    input.taxYear === 2026 &&
+    input.filerType === "myself" &&
+    isBusinessPensionServicesSourceSet(input.incomeSources)
+  );
 }
 
 /** Full server-side gate for the supported TY2026 Myself Services routes. */
@@ -108,7 +197,7 @@ export function freelancerBankDecisionError(
 ): string | null {
   if (normalizeBankCategory(category) !== "SERVICES") return null;
   if (!freelancerEnabled)
-    return "Freelancer services income is enabled only for TY2026 Myself filings with either Services alone, exactly Salary + Services, exactly Pension + Services, or exactly Business + Services; other combinations remain unsupported.";
+    return "Freelancer services income is enabled only for TY2026 Myself filings with either Services alone, exactly Salary + Services, exactly Pension + Services, exactly Business + Services, exactly Salary + Business + Services, exactly Salary + Pension + Services, or exactly Business + Pension + Services; other combinations remain unsupported.";
   if (entryType !== "INCOME")
     return "Choose Income for freelancer services receipts.";
   return null;

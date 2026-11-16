@@ -82,6 +82,7 @@ const FILL_STATUS = {
 /** Statuses that mean "the cell ends up holding the packet value". */
 const SUCCESS_STATUSES = new Set(["filled", "already_correct"]);
 
+
 /**
  * Amounts the portal will actually accept. The captured amount inputs are
  * `type=text` with `onkeypress="if (event.which > 57) return false;"` and a

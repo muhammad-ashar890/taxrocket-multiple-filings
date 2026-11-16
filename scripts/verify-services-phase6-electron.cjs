@@ -258,8 +258,18 @@ test("Phase 6 route is active only for TY2026 Myself Services-only, Salary+Servi
   assert.equal(businessCombined.pensionIncluded, false);
   assert.equal(businessCombined.businessIncluded, true);
 
-  const rejected = [
+  // Salary + Pension + Services is a supported triple since the pension twin of
+  // the Salary + Business + Services route landed; both companions switch on.
+  const pensionAndSalary = main.getServicesPacketRoute(
     snapshotWith({ incomeSources: ["services", "pension", "salary"] }),
+  );
+  assert.equal(pensionAndSalary.active, true);
+  assert.equal(pensionAndSalary.salaryIncluded, true);
+  assert.equal(pensionAndSalary.pensionIncluded, true);
+  assert.equal(pensionAndSalary.businessIncluded, false);
+
+  const rejected = [
+    snapshotWith({ incomeSources: ["services", "pension", "salary", "business"] }),
     snapshotWith({ incomeSources: ["services", "salary", "property_rent"] }),
     snapshotWith({ incomeSources: ["services", "services"] }),
     snapshotWith({ taxYear: 2025 }),
@@ -633,6 +643,67 @@ test("Tax Deduction row creation accepts only the exact Services target and neve
   );
 });
 
+test("Services Tax Deduction waits for a newly added row's captured cells to become writable", async () => {
+  const withholding = flattenedServicesFields.find(
+    (field) => field.servicesMappingKind === "SERVICES_WITHHOLDING",
+  );
+  const originalNavigate = navigation.navigateToSection;
+  const originalAllowedUrl = navigation.isAllowedPortalUrl;
+  let added = false;
+  let lockedReadbacks = 0;
+  const actions = [];
+  const frame = {
+    url: "https://iris.fbr.gov.pk/nitr/workflow",
+    async executeJavaScript(source) {
+      const action = ["inspect", "open", "select", "add", "cancel"].find(
+        (name) => source.includes(`)(${JSON.stringify(name)},`),
+      );
+      assert.ok(action, "the driver invoked a known picker action");
+      actions.push(action);
+      if (action === "open") return { scope: true, ok: true, reason: "picker_open_requested" };
+      if (action === "select") return { scope: true, ok: true, reason: "target_card_selected" };
+      if (action === "add") {
+        added = true;
+        return { scope: true, ok: true, reason: "target_card_add_requested" };
+      }
+      if (action === "inspect" && !added)
+        return { scope: true, ok: false, reason: "row_missing" };
+      if (action === "inspect" && lockedReadbacks++ < 2)
+        return { scope: true, ok: false, reason: "existing_row_checked" };
+      return { scope: true, ok: true, reason: "existing_row_checked" };
+    },
+  };
+  const windowInstance = {
+    webContents: {
+      mainFrame: { framesInSubtree: [frame] },
+      getURL: () => frame.url,
+    },
+  };
+
+  try {
+    navigation.navigateToSection = async () => ({ ok: true, status: "switched" });
+    navigation.isAllowedPortalUrl = () => true;
+    const result = await businessRows.ensureTaxDeductionRows(
+      windowInstance,
+      [withholding],
+      {
+        mode: "live",
+        taxYear: 2026,
+        taxpayerIdentifier: "0000000000000",
+        pickerWaitAttempts: 4,
+        pickerWaitMs: 1,
+      },
+    );
+    assert.deepEqual(result, { ok: true, reason: "tax_deduction_rows_verified" });
+    assert.equal(lockedReadbacks, 3, "two disabled reads precede the writable readback");
+    assert.equal(actions.filter((action) => action === "add").length, 1);
+    assert.ok(!actions.includes("cancel"), "a transient disabled row is not treated as an addition failure");
+  } finally {
+    navigation.navigateToSection = originalNavigate;
+    navigation.isAllowedPortalUrl = originalAllowedUrl;
+  }
+});
+
 test("Services handoff is Services-only, hides the generic final-review item and records no-Save policy", () => {
   const scope = main.buildHandoffScopeSummary(
     { total: 2, filled: 2, skipped: 0 },
@@ -684,7 +755,7 @@ test("Services handoff is Services-only, hides the generic final-review item and
   assert.equal(scope.propertyPaymentsComputations, "not_applicable");
   assert.equal(scope.save.routePolicy, "services_save_once");
   assert.equal(scope.save.clicked, false);
-  assert.match(scope.label, /Freelancer \/ Services 2\/2 verified field\(s\) entered/);
+  assert.match(scope.label, /Freelancer \/ Services 2\/2 approved field\(s\) verified/);
   assert.match(scope.label, /Wealth ✅ 7\/7 row\(s\) entered/);
   assert.match(scope.label, /draft Save is attempted only after scoped post-tab readback/i);
   assert.doesNotMatch(scope.label, /Salary|Business Details|press Calculate/);
@@ -711,6 +782,51 @@ test("combined Salary + Services handoff names both routes and keeps their field
   assert.equal(scope.salaryFields.filled, 1);
   assert.equal(scope.salaryFields.skipped, 0);
   assert.match(scope.label, /Salary 1\/1 \+ Freelancer \/ Services 8\/8 approved field\(s\) verified/);
+});
+
+test("Salary + Business + Services handoff keeps full Business and Services-backed counts visible", () => {
+  const scope = main.buildHandoffScopeSummary(
+    { total: 20, filled: 20, skipped: 0 },
+    false,
+    [],
+    {
+      route: {
+        id: "salary_business_services",
+        label: "Salary + Business + Freelancer / Services",
+        incomeSources: ["salary", "business", "services"],
+      },
+      salarySummary: { total: 2, filled: 2, skipped: 0 },
+      salaryIncluded: true,
+      business: {
+        total: 15, filled: 15, skipped: 0, mode: "live",
+        coverage: "partial_manual_required", pending: [],
+      },
+      services: {
+        total: 3, filled: 3, skipped: 0,
+        sharedCells: [{ irisCode: "3101", businessAmount: 500000, servicesAmount: 8000000 }],
+      },
+      wealth: { enabled: true, mode: "live", summary: { total: 3, filled: 3 } },
+      wealthReconciliationCheck: {
+        status: "gap",
+        unreconciled: -20000,
+        gapSide: "missing_outflow",
+        message: "Missing evidenced outflow",
+      },
+    },
+  );
+  assert.equal(scope.business.route, "business");
+  assert.equal(scope.business.preparedFields, 15);
+  assert.equal(scope.services.preparedFields, 3);
+  assert.equal(scope.services.filledFields, 3);
+  assert.equal(scope.services.sharedCells.length, 1);
+  assert.deepEqual(plain(scope.salaryFields), { total: 2, filled: 2, skipped: 0 });
+  assert.equal(scope.route.label, "Salary + Business + Freelancer / Services");
+  assert.match(scope.label, /Salary 2\/2 \+ Business 15\/15 \+ Freelancer \/ Services 3\/3 approved field\(s\) verified/);
+  assert.equal((scope.label.match(/Business 15\/15/g) || []).length, 1);
+  assert.equal(scope.wealthStatement, "needs_review");
+  assert.equal(scope.wealthReconciliationCheck.unreconciled, -20000);
+  assert.equal(scope.nextStep, "taxpayer_resolves_wealth_reconciliation");
+  assert.equal(scope.readyToSubmit, false);
 });
 
 test("combined Pension + Services handoff labels both sources and exposes pension readback totals", () => {
@@ -872,9 +988,40 @@ test("job report records one gated Services draft Save and unsupported mappings 
     },
   }).join("\\n");
   assert.match(pensionReport, /SAVE \(Pension \+ Freelancer \/ Services draft-save policy\)/);
+  const tripleReport = jobReport.buildJobReport({
+    finalStatus: "paused",
+    result: {
+      autofill: {
+        routeScope: {
+          id: "salary_business_services",
+          label: "Salary + Business + Freelancer / Services",
+          incomeSources: ["salary", "business", "services"],
+        },
+        save: {
+          status: "not_attempted",
+          clicked: false,
+          routePolicy: "services_save_once",
+          reason: "Wealth reconciliation is not balanced",
+        },
+      },
+    },
+  }).join("\\n");
+  assert.match(tripleReport, /SAVE \(Salary \+ Business \+ Freelancer \/ Services draft-save policy\)/);
   assert.deepEqual(
     jobReport.classifyFieldResult({ status: "services_mapping_unverified" }),
     { outcome: "NOT_SUPPORTED_YET", category: "SCOPE" },
+  );
+});
+
+test("shared route descriptor derives the triple label from sources, not Save policy", () => {
+  const { buildFbrHandoffRoute } = require("../electron-connect/fbr-handoff-route.js");
+  assert.deepEqual(
+    buildFbrHandoffRoute(["services", "salary", "business", "salary"]),
+    {
+      id: "salary_business_services",
+      label: "Salary + Business + Freelancer / Services",
+      incomeSources: ["salary", "business", "services"],
+    },
   );
 });
 
@@ -947,6 +1094,9 @@ test("packaged agent identity, Services contract and web handoff contract stay w
   assert.match(server, /"1009", "64020004"/);
   assert.match(server, /"services_entered"/);
   assert.match(server, /save\.routePolicy === "services_save_once"/);
+  assert.match(server, /scope\.services\.preparedFields/);
+  assert.match(server, /scope\.wealthReconciliationCheck/);
+  assert.match(server, /scope\.route\.label/);
 
   const client = read("components/tax/fbr-connect-client.tsx");
   for (const needle of [
@@ -955,15 +1105,15 @@ test("packaged agent identity, Services contract and web handoff contract stay w
     "portal_expense_retry",
     "automaticRetryPause",
     "Retry automatic filing",
-    "servicesRouteName",
-    "Salary + Freelancer / Services",
-    "Pension + Freelancer / Services",
-    "including Salary + Services or Pension + Services",
+    "routeLabel",
+    "hasFullBusiness",
+    "scope?.services",
+    "including Salary, Pension, Business, or Salary + Business combinations",
     "it may press Save once at the end",
-    "If all scoped figures pass readback, it will press Save once at the end",
     "Draft Save was not pressed (${save?.reason",
-    "saveReadbackVerified",
     "Draft Save pressed — verify in FBR",
+    "wealthReconciliationCheck",
+    "Business — manual return review remains",
   ]) {
     assert.ok(client.includes(needle), `FBR Connect client carries ${needle}`);
   }
@@ -975,4 +1125,12 @@ test("packaged agent identity, Services contract and web handoff contract stay w
   assert.match(mainSource, /services_readback_retry/);
   assert.match(mainSource, /final scoped readback did not confirm/);
   assert.match(mainSource, /portal_expense_retry/);
+  assert.match(mainSource, /wealthReviewRequired/);
+  assert.match(mainSource, /Wealth reconciliation is not balanced/);
+  assert.match(mainSource, /buildFbrHandoffRoute/);
+  assert.match(
+    read("electron-connect/package.json"),
+    /"fbr-handoff-route\.js"/,
+    "the shared route helper ships inside the packaged desktop agent",
+  );
 });

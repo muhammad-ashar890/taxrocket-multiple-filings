@@ -15,7 +15,11 @@ import {
   isBusinessBankCategory,
   isMyselfBusinessBankFlow,
   isSingleFreelancerServicesFiling,
+  isSalaryBusinessServicesFiling,
+  isBusinessPensionServicesFiling,
 } from "@/lib/tax/business-bank-categories";
+import { buildSalaryBusinessServicesPlan } from "@/lib/tax/salary-business-services-plan";
+import { buildBusinessPensionServicesPlan } from "@/lib/tax/business-pension-services-plan";
 import {
   buildBusinessPacket,
   readBusinessBalanceSheet,
@@ -697,7 +701,7 @@ export async function generateFilingPacketAction(
       return {
         success: false,
         error:
-          "Services income evidence supports only TY2026 Myself filings with Services alone, exactly Salary + Services, exactly Pension + Services, or exactly Business + Services. Other source combinations are unsupported, so no Services packet was generated.",
+          "Services income evidence supports only TY2026 Myself filings with Services alone, exactly Salary + Services, exactly Pension + Services, exactly Business + Services, or exactly Salary + Business + Services, or exactly Salary + Pension + Services, or exactly Business + Pension + Services. Other source combinations are unsupported, so no Services packet was generated.",
       };
     }
 
@@ -955,13 +959,27 @@ export async function generateFilingPacketAction(
       if (!matchesSource) return { success: false, error: "Pension source, profile age or answer changed (or this is an older calculation). Recalculate Tax and approve a fresh pension packet." };
     }
 
+    // Route 7 (Business + Pension + Services, no Salary) needs the same
+    // companion fold as Business + Pension: its pension is a normal-slab
+    // companion or a final-tax source, never a Business row.
+    const isBusinessPensionServices = isBusinessPensionServicesFiling({
+      taxYear: draftData.taxYear,
+      filerType: draftData.filerType,
+      incomeSources: parsedIncomeSources,
+    });
     const supportedCombinedBusinessSources =
       parsedIncomeSources.includes("business") &&
       parsedIncomeSources.length > 1 &&
-      parsedIncomeSources.every(
+      (parsedIncomeSources.every(
         (source) =>
           source === "business" || source === "salary" || source === "pension",
-      );
+      ) ||
+        isSalaryBusinessServicesFiling({
+          taxYear: draftData.taxYear,
+          filerType: draftData.filerType,
+          incomeSources: parsedIncomeSources,
+        }) ||
+        isBusinessPensionServices);
     const salaryReadyForCombinedComputations =
       !parsedIncomeSources.includes("salary") ||
       (salaryCertificateGrossSalary !== null && salaryCertificateGrossSalary > 0);
@@ -1171,6 +1189,13 @@ export async function generateFilingPacketAction(
         pensionTreatment: pensionSource?.treatment ?? null,
         calculationLines: taxCalculationLinesForComputations,
         mappedServicesIncomePkr: mappedServicesIncomeForComputations,
+        mappedFinalTaxServicesIncomePkr: sumMoney(
+          // 154A export revenue is final tax: outside Division I of Part I, so
+          // it neither joins the salary slabs nor blocks the salary half of 923184.
+          (servicesPortalMappings?.businessFields ?? [])
+            .filter((f) => String(f.column ?? "") === "Subject to Final Tax" && String(f.servicesMappingKind ?? "").startsWith("SERVICES"))
+            .map((f) => f.ourAmount),
+        ),
         hasServicesIncomeGaps:
           (servicesPortalMappings?.incomeGaps.length ?? 0) > 0,
         businessExpectedComputations:
@@ -1209,6 +1234,39 @@ export async function generateFilingPacketAction(
       }
     }
 
+    // Business withholding has the same Wealth effect as Salary/Services tax:
+    // the payer retained it before the net receipt reached the bank. Use only
+    // the already validated Business Tax Deduction plan, one 7098 row per
+    // statutory section. An unrecognised evidence label stops packet creation
+    // rather than silently recreating the negative 703000 gap.
+    const businessTaxDeductedBySection = new Map<
+      string,
+      { section: string; amount: number; sourceEntryCount: number }
+    >();
+    for (const entry of business?.taxDeductions?.entries ?? []) {
+      const match = /\bu\/s\s+(\d+(?:\([^)]+\))*)/i.exec(entry.label);
+      if (!match) {
+        return {
+          success: false,
+          error: `Business Tax Deduction ${entry.code} has no recognisable statutory section for its Wealth Statement outflow. Review the section evidence; no packet was generated.`,
+        };
+      }
+      const section = match[1];
+      const amount = Math.round(Number(entry.taxDeducted));
+      if (!Number.isFinite(amount) || amount <= 0) continue;
+      const group = businessTaxDeductedBySection.get(section);
+      if (group) {
+        group.amount += amount;
+        group.sourceEntryCount += 1;
+      } else {
+        businessTaxDeductedBySection.set(section, {
+          section,
+          amount,
+          sourceEntryCount: 1,
+        });
+      }
+    }
+
     // Build portalFieldMap using IRIS codes for Electron agent
     const portalFieldMap = buildPortalFieldMap({
       taxYear: draftData.taxYear,
@@ -1216,6 +1274,9 @@ export async function generateFilingPacketAction(
       taxpayerListStatus: draftData.taxpayerListStatus,
       servicesTaxDeductedAtSource: Array.from(
         servicesTaxDeductedBySection.values(),
+      ),
+      businessTaxDeductedAtSource: Array.from(
+        businessTaxDeductedBySection.values(),
       ),
       businessBankEntriesCoveredByDeclaredProfit:
         Boolean(business) && isMyselfBusinessBankFlow(draftData),
@@ -1503,6 +1564,54 @@ export async function generateFilingPacketAction(
         (servicesPortalMappings?.incomeGaps.length ?? 0) > 0,
       hasUnmappedPortalIncome,
     });
+    const isSalaryBusinessServices = isSalaryBusinessServicesFiling({
+      taxYear: draftData.taxYear,
+      filerType: draftData.filerType,
+      incomeSources: parsedIncomeSources,
+    });
+    const salaryBusinessServices = isSalaryBusinessServices && business
+      ? buildSalaryBusinessServicesPlan({
+          taxYear: draftData.taxYear,
+          filerType: draftData.filerType,
+          incomeSources: parsedIncomeSources,
+          businessExpectedIrisTotals: business.expectedIrisTotals,
+          servicesFields: servicesBusinessFields,
+          hasUnmappedPortalIncome,
+        })
+      : null;
+    // Route 7: the versioned envelope the desktop resolver requires before it
+    // may activate. It fails closed (null) on anything it cannot prove, and a
+    // null here aborts the packet instead of shipping a half envelope.
+    const businessPensionServices =
+      isBusinessPensionServices && business
+        ? buildBusinessPensionServicesPlan({
+            taxYear: draftData.taxYear,
+            filerType: draftData.filerType,
+            incomeSources: parsedIncomeSources,
+            businessExpectedIrisTotals: business.expectedIrisTotals,
+            servicesFields: servicesBusinessFields,
+            hasUnmappedPortalIncome,
+            pension: {
+              treatment: pensionSource?.treatment ?? null,
+              annualPension: pensionSource?.annualPension ?? 0,
+              surcharge: pensionSource?.surcharge ?? null,
+            },
+          })
+        : null;
+    if (isBusinessPensionServices && !businessPensionServices) {
+      return {
+        success: false,
+        error:
+          "The Business + Pension + Services packet could not establish its combined Business, Pension and Services computations (Taxable Income, Normal Tax and the Section 4AB surcharge). A normal-tax Services rupee, an unmapped portal source or a pension figure the statement does not prove keeps this route closed. Review the current evidence and recalculate; no filing packet was approved.",
+      };
+    }
+    if (isSalaryBusinessServices && !salaryBusinessServices) {
+      return {
+        success: false,
+        error:
+          "The Salary + Business + Services packet could not establish its approved Services income columns and fold-aware IRIS computations. Review the current Salary, Business and Services evidence and recalculate; no filing packet was approved.",
+      };
+    }
 
     const latestOwnership = await currentBusinessOwnershipStamp(draft.id, draft.userId);
     if (latestOwnership.error || JSON.stringify(latestOwnership.stamp) !== JSON.stringify(initialOwnership.stamp))
@@ -1575,6 +1684,8 @@ export async function generateFilingPacketAction(
             },
           }
         : {}),
+      ...(salaryBusinessServices ? { salaryBusinessServices } : {}),
+      ...(businessPensionServices ? { businessPensionServices } : {}),
       coverage,
     };
 
