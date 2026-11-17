@@ -2,7 +2,7 @@
 
 > ### Engineering Rule #1 — Never Guess, Always Verify Root Cause First
 > **Never fix or change anything by guessing.** Always trace, reproduce, and verify the actual bug, root cause, live code path, and existing test assertions directly in the codebase before writing or applying any fix.
->
+> 
 > ### Engineering Rule #2 — Permanent IRIS Contracts (`rawHtmlPersisted: false`)
 > Once an IRIS page or modal has been inspected once, its row codes, column shapes, and modal selectors are saved permanently in code/JSON contracts (`lib/tax/portal-row-evidence.ts`, `electron-connect/iris-*-contract.json`, `scripts/contracts/*.json`). **Raw HTML captures are transient and never kept in the repo — never ask the operator to re-upload HTML captures for sections (`Salary`, `Wealth 116`, `Business`, `Services`, `Employer`) already recorded in these contracts.** Only request a capture when integrating a genuinely brand-new IRIS tab or modal for the first time.
 
